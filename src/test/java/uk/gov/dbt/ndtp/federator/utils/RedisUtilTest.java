@@ -53,7 +53,7 @@ import redis.clients.jedis.exceptions.JedisDataException;
 class RedisUtilTest {
 
     @Container
-    private static final RedisContainer redis = new RedisContainer("<<CONTAINER_REGISTRY_URL>>/dpn/redis:7");
+    private static final RedisContainer redis = new RedisContainer(RedisContainer.DEFAULT_IMAGE_NAME);
 
     private final long RANDOM_OFFSET = new Random().nextLong();
     private final String RANDOM_CLIENT = RandomStringUtils.random(6, true, true);
