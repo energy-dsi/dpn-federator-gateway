@@ -106,7 +106,7 @@ public class ManagementNodeDataHandler implements ManagementNodeDataHandlerInter
     private String loadRequiredUrl() {
         final String url;
         try {
-            url = PropertyUtil.getPropertyValue(BASE_URL_PROP, "https://localhost:8080");
+            url = PropertyUtil.getPropertyValue(BASE_URL_PROP, "https://localhost:9080");
         } catch (Exception e) {
             throw new IllegalStateException(ERR_MISSING_PROP + BASE_URL_PROP, e);
         }

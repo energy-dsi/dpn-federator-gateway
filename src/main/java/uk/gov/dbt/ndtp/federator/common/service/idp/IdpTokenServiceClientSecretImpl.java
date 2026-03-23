@@ -36,6 +36,21 @@ public class IdpTokenServiceClientSecretImpl extends AbstractIdpTokenService {
         this.idpTokenUrl = properties.getProperty("idp.token.url");
         this.idpClientId = properties.getProperty("idp.client.id");
         this.idpClientSecret = properties.getProperty("idp.client.secret");
+
+// Validation + log what we can safely show
+        if (idpTokenUrl == null || idpTokenUrl.isBlank()) {
+            log.error("IDP token URL is missing (property 'idp.token.url').");
+        }
+        if (idpClientId == null || idpClientId.isBlank()) {
+            log.error("IDP client ID is missing (property 'idp.client.id').");
+        }
+        if (idpClientSecret == null || idpClientSecret.isBlank()) {
+            log.warn("IDP client secret is missing (property 'idp.client.secret').");
+        }
+
+        log.info("IDP token service initialised. tokenUrl='{}', clientId='{}', secretPresent={}",
+                idpTokenUrl, idpClientId, idpClientSecret != null && !idpClientSecret.isBlank());
+
     }
 
     /**
@@ -63,6 +78,7 @@ public class IdpTokenServiceClientSecretImpl extends AbstractIdpTokenService {
     }
 
     private String fetchTokenInternal() {
+        log.info("fetchToken() - Enter");
         try {
             String body = GRANT_TYPE
                     + EQUALS_SIGN
@@ -75,6 +91,7 @@ public class IdpTokenServiceClientSecretImpl extends AbstractIdpTokenService {
                     + CLIENT_SECRET
                     + EQUALS_SIGN
                     + idpClientSecret;
+            log.info("fetchToken() - body: {}", body);
 
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(idpTokenUrl))
@@ -83,6 +100,7 @@ public class IdpTokenServiceClientSecretImpl extends AbstractIdpTokenService {
                     .build();
 
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            log.info("response{}",response.body());
             if (response.statusCode() != 200) {
                 throw new FederatorTokenException(
                         String.format("Failed to fetch token: HTTP %d - %s", response.statusCode(), response.body()));
@@ -90,12 +108,15 @@ public class IdpTokenServiceClientSecretImpl extends AbstractIdpTokenService {
             Map<String, Object> json =
                     objectMapper.readValue(response.body(), new TypeReference<Map<String, Object>>() {});
             var accessToken = (String) json.get(ACCESS_TOKEN);
+            log.info("accessToken: {}", accessToken);
             log.info("Access token fetched successfully");
             return accessToken;
         } catch (InterruptedException e) {
+            e.printStackTrace();
             Thread.currentThread().interrupt();
             throw new FederatorTokenException("Thread interrupted while fetching token from IDP", e);
         } catch (Exception e) {
+            e.printStackTrace();
             throw new FederatorTokenException("Error fetching token from IDP", e);
         }
     }
