@@ -13,7 +13,6 @@ import uk.gov.dbt.ndtp.federator.exceptions.FederatorTokenException;
  * Defines contract for interacting with an IDP: fetching and verifying tokens.
  */
 public interface IdpTokenService {
-    Logger LOG = LoggerFactory.getLogger(IdpTokenService.class);
 
     String GRANT_TYPE = "grant_type";
     String CLIENT_ID = "client_id";
@@ -80,8 +79,6 @@ public interface IdpTokenService {
      * @return The access token as a String
      */
     default String fetchTokenWithResilience(String managementNodeId) {
-        LOG.debug("management nodeid",managementNodeId);
-
         final String componentName = "idp-token-service";
         Supplier<String> supplier = () -> fetchToken(managementNodeId);
         try {
