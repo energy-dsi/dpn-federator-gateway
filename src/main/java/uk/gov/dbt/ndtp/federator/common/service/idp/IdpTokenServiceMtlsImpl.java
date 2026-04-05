@@ -28,6 +28,8 @@ public class IdpTokenServiceMtlsImpl extends AbstractIdpTokenService {
     private static final String MANAGEMENT_NODE_DEFAULT_ID = "default";
     private final String idpTokenUrl;
     private final String idpClientId;
+/****  This is for client secret ****/    
+    private final String idpClientSecret;
 
     public IdpTokenServiceMtlsImpl(HttpClient httpClient, ObjectMapper objectMapper) {
         super(
