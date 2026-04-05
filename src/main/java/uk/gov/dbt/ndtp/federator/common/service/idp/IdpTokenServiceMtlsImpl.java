@@ -42,7 +42,23 @@ public class IdpTokenServiceMtlsImpl extends AbstractIdpTokenService {
 /*  This is combined client secret + mTLS */
         this.idpClientSecret = properties.getProperty("idp.client.secret");
 
+// Validation + log what we can safely show
+        if (idpTokenUrl == null || idpTokenUrl.isBlank()) {
+            log.error("IDP token URL is missing (property 'idp.token.url').");
+        }
+        if (idpClientId == null || idpClientId.isBlank()) {
+            log.error("IDP client ID is missing (property 'idp.client.id').");
+        }
+        if (idpClientSecret == null || idpClientSecret.isBlank()) {
+            log.warn("IDP client secret is missing (property 'idp.client.secret').");
+        }
+
+        log.info("IDP token service initialised. tokenUrl='{}', clientId='{}', secretPresent={}",
+                idpTokenUrl, idpClientId, idpClientSecret != null && !idpClientSecret.isBlank());
+
+
     }
+
 
     @Override
     public String fetchToken() {
