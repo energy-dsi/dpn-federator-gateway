@@ -37,6 +37,9 @@ public class IdpTokenServiceMtlsImpl extends AbstractIdpTokenService {
         Properties properties = PropertyUtil.getPropertiesFromFilePath(COMMON_CONFIG_PROPERTIES);
         this.idpTokenUrl = properties.getProperty("idp.token.url");
         this.idpClientId = properties.getProperty("idp.client.id");
+/*  This is combined client secret + mTLS */
+        this.idpClientSecret = properties.getProperty("idp.client.secret");
+
     }
 
     @Override
@@ -73,8 +76,8 @@ public class IdpTokenServiceMtlsImpl extends AbstractIdpTokenService {
             }
 
             String body =
-                    GRANT_TYPE + EQUALS_SIGN + CLIENT_CREDENTIALS + AMPERSAND + CLIENT_ID + EQUALS_SIGN + idpClientId;
-
+/*                    GRANT_TYPE + EQUALS_SIGN + CLIENT_CREDENTIALS + AMPERSAND + CLIENT_ID + EQUALS_SIGN + idpClientId; */
+                    GRANT_TYPE + EQUALS_SIGN + CLIENT_CREDENTIALS + AMPERSAND + CLIENT_ID + EQUALS_SIGN + idpClientId + AMPERSAND +  CLIENT_SECRET + EQUALS_SIGN + idpClientSecret;
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(idpTokenUrl))
                     .header(HEADER_CONTENT_TYPE, CONTENT_TYPE_FORM_URLENCODED)
