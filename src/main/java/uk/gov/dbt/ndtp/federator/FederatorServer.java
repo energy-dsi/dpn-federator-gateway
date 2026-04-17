@@ -36,6 +36,9 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+/* Added new Health Server */
+import uk.gov.dbt.ndtp.federator.server.grpc.HealthServer;
 import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
 import uk.gov.dbt.ndtp.federator.common.utils.ThreadUtil;
 import uk.gov.dbt.ndtp.federator.server.grpc.GRPCServer;
@@ -101,6 +104,9 @@ public class FederatorServer {
         futureList.add(THREADED_EXECUTOR.submit(new Looper()));
 
         LOGGER.info("Start GRPC Server process");
+        /* Start HTTP health server */
+        HealthServer.start();
+        LOGGER.info("Health Check Endpoint Started on Port 8080");
         String sHeaders = PropertyUtil.getPropertyValue(SHARED_HEADERS, CONTENT_TYPE);
         Set<String> sharedHeaders = Set.of(sHeaders.split(HEADER_SEPARATOR));
         LOGGER.info("Shared Headers - '{}'", sharedHeaders);
