@@ -94,7 +94,6 @@ public class GRPCServer implements AutoCloseable {
     public GRPCServer(Set<String> sharedHeaders) {
         creds = generateServerCredentials();
         server = generateSecureServer(creds, sharedHeaders);
-        LOGGER.info("Secure Server Generation Begin.");
     }
 
     private Server generateSecureServer(ServerCredentials creds, Set<String> sharedHeaders) {
