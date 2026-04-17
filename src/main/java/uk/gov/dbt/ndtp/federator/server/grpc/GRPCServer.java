@@ -153,7 +153,7 @@ public class GRPCServer implements AutoCloseable {
         boolean mtlsEnabled =
                 PropertyUtil.getPropertyBooleanValue(SERVER_MTLS_ENABLED, FALSE);
 
-        LOGGER.info("mtlsEnabled found as=", mtlsEnabled);
+        LOGGER.info("mtlsEnabled found as={}", mtlsEnabled);
 
         TlsServerCredentials.Builder tlsBuilder =
                 TlsServerCredentials.newBuilder()
