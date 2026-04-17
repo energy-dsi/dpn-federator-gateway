@@ -79,6 +79,7 @@ public class GRPCServer implements AutoCloseable {
 
     private ServerCredentials creds;
 
+/*
     public GRPCServer(Set<String> sharedHeaders) {
         if (PropertyUtil.getPropertyBooleanValue(SERVER_MTLS_ENABLED, FALSE)) {
             creds = generateServerCredentials();
@@ -87,6 +88,13 @@ public class GRPCServer implements AutoCloseable {
             LOGGER.warn("Server TLS is not enabled, using insecure server.");
             server = generateServer(sharedHeaders);
         }
+    }
+*/
+
+    public GRPCServer(Set<String> sharedHeaders) {
+        creds = generateServerCredentials();
+        server = generateSecureServer(creds, sharedHeaders);
+        LOGGER.info("Secure Server Generation Begin.");
     }
 
     private Server generateSecureServer(ServerCredentials creds, Set<String> sharedHeaders) {
@@ -144,6 +152,8 @@ public class GRPCServer implements AutoCloseable {
 /*  The following code is modified to enable Client auth from mTLS enabled parameter */
         boolean mtlsEnabled =
                 PropertyUtil.getPropertyBooleanValue(SERVER_MTLS_ENABLED, FALSE);
+
+        LOGGER.info("mtlsEnabled found as=", mtlsEnabled);
 
         TlsServerCredentials.Builder tlsBuilder =
                 TlsServerCredentials.newBuilder()
