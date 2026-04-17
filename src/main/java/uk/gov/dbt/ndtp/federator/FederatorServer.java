@@ -106,7 +106,7 @@ public class FederatorServer {
         LOGGER.info("Start GRPC Server process");
         // Start HTTPS health server
         HealthHttpsServer.start();
-        LOGGER.info("Health Check Endpoint Started on Port 8080");
+        LOGGER.info("Health Check Endpoint Started on Port 8443");
         String sHeaders = PropertyUtil.getPropertyValue(SHARED_HEADERS, CONTENT_TYPE);
         Set<String> sharedHeaders = Set.of(sHeaders.split(HEADER_SEPARATOR));
         LOGGER.info("Shared Headers - '{}'", sharedHeaders);
