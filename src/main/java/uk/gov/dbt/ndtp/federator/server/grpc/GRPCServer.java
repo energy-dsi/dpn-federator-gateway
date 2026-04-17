@@ -121,6 +121,8 @@ public class GRPCServer implements AutoCloseable {
         String trustStoreFilePath = PropertyUtil.getPropertyValue(SERVER_TRUSTSTORE_FILE_PATH);
         String trustStorePassword = PropertyUtil.getPropertyValue(SERVER_TRUSTSTORE_PASSWORD);
 
+        
+
         LOGGER.info(
                 "Using p12 file path: {}, truststore file path: {}, p12 password is set: {}, truststore password is set: {}",
                 p12FilePath,
@@ -131,12 +133,31 @@ public class GRPCServer implements AutoCloseable {
         KeyManager[] keyManagerFromP12 = SSLUtils.createKeyManagerFromP12(p12FilePath, p12Password);
         TrustManager[] trustManager = SSLUtils.createTrustManager(trustStoreFilePath, trustStorePassword);
 
+/*
         TlsServerCredentials.Builder tlsBuilder = TlsServerCredentials.newBuilder()
                 .keyManager(keyManagerFromP12)
                 .trustManager(trustManager)
                 .clientAuth(TlsServerCredentials.ClientAuth.REQUIRE);
 
         return tlsBuilder.build();
+*/
+/*  The following code is modified to enable Client auth from mTLS enabled parameter */
+        boolean mtlsEnabled =
+                PropertyUtil.getPropertyBooleanValue(SERVER_MTLS_ENABLED, FALSE);
+
+        TlsServerCredentials.Builder tlsBuilder =
+                TlsServerCredentials.newBuilder()
+                        .keyManager(keyManagerFromP12);
+            if (mtlsEnabled) {
+                tlsBuilder
+                    .trustManager(trustManager)
+                    .clientAuth(TlsServerCredentials.ClientAuth.REQUIRE);
+            } else {
+                tlsBuilder.clientAuth(TlsServerCredentials.ClientAuth.NONE);
+            }
+
+        return tlsBuilder.build();
+
     }
 
     public void start() {
