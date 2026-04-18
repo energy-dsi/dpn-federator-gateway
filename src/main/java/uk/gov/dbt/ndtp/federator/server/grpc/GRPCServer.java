@@ -43,6 +43,7 @@ import javax.net.ssl.TrustManager;
 import lombok.SneakyThrows;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import uk.gov.dbt.ndtp.federator.common.annotations.ExcludeFromJacocoGeneratedReport;
 import uk.gov.dbt.ndtp.federator.common.service.idp.IdpTokenService;
 import uk.gov.dbt.ndtp.federator.common.utils.GRPCUtils;
 import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
@@ -78,9 +79,10 @@ public class GRPCServer implements AutoCloseable {
     private final Server server;
 
     private ServerCredentials creds;
+    private GRPCFederatorService grpcFederatorService;
 
-/*
     public GRPCServer(Set<String> sharedHeaders) {
+        grpcFederatorService = new GRPCFederatorService(sharedHeaders);
         if (PropertyUtil.getPropertyBooleanValue(SERVER_MTLS_ENABLED, FALSE)) {
             creds = generateServerCredentials();
             server = generateSecureServer(creds, sharedHeaders);
@@ -88,12 +90,6 @@ public class GRPCServer implements AutoCloseable {
             LOGGER.warn("Server TLS is not enabled, using insecure server.");
             server = generateServer(sharedHeaders);
         }
-    }
-*/
-
-    public GRPCServer(Set<String> sharedHeaders) {
-        creds = generateServerCredentials();
-        server = generateSecureServer(creds, sharedHeaders);
     }
 
     private Server generateSecureServer(ServerCredentials creds, Set<String> sharedHeaders) {
@@ -128,10 +124,9 @@ public class GRPCServer implements AutoCloseable {
         String trustStoreFilePath = PropertyUtil.getPropertyValue(SERVER_TRUSTSTORE_FILE_PATH);
         String trustStorePassword = PropertyUtil.getPropertyValue(SERVER_TRUSTSTORE_PASSWORD);
 
-        
-
         LOGGER.info(
-                "Using p12 file path: {}, truststore file path: {}, p12 password is set: {}, truststore password is set: {}",
+                "Using p12 file path: {}, truststore file path: {}, p12 password is set: {}, truststore password is"
+                        + " set: {}",
                 p12FilePath,
                 trustStoreFilePath,
                 p12Password != null,
@@ -140,33 +135,12 @@ public class GRPCServer implements AutoCloseable {
         KeyManager[] keyManagerFromP12 = SSLUtils.createKeyManagerFromP12(p12FilePath, p12Password);
         TrustManager[] trustManager = SSLUtils.createTrustManager(trustStoreFilePath, trustStorePassword);
 
-/*
         TlsServerCredentials.Builder tlsBuilder = TlsServerCredentials.newBuilder()
                 .keyManager(keyManagerFromP12)
                 .trustManager(trustManager)
                 .clientAuth(TlsServerCredentials.ClientAuth.REQUIRE);
 
         return tlsBuilder.build();
-*/
-/*  The following code is modified to enable Client auth from mTLS enabled parameter */
-        boolean mtlsEnabled =
-                PropertyUtil.getPropertyBooleanValue(SERVER_MTLS_ENABLED, FALSE);
-
-        LOGGER.info("mtlsEnabled found as={}", mtlsEnabled);
-
-        TlsServerCredentials.Builder tlsBuilder =
-                TlsServerCredentials.newBuilder()
-                        .keyManager(keyManagerFromP12);
-            if (mtlsEnabled) {
-                tlsBuilder
-                    .trustManager(trustManager)
-                    .clientAuth(TlsServerCredentials.ClientAuth.REQUIRE);
-            } else {
-                tlsBuilder.clientAuth(TlsServerCredentials.ClientAuth.NONE);
-            }
-
-        return tlsBuilder.build();
-
     }
 
     public void start() {
@@ -178,10 +152,12 @@ public class GRPCServer implements AutoCloseable {
         }
     }
 
+    @ExcludeFromJacocoGeneratedReport
     @Override
     public void close() {
         try {
             LOGGER.info("GRPCServer close called");
+            grpcFederatorService.close();
             server.shutdown().awaitTermination(30, TimeUnit.SECONDS);
             LOGGER.info("GRPCServer closed");
         } catch (InterruptedException e) {
