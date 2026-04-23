@@ -13,7 +13,6 @@ import uk.gov.dbt.ndtp.federator.exceptions.FederatorTokenException;
  * Defines contract for interacting with an IDP: fetching and verifying tokens.
  */
 public interface IdpTokenService {
-    Logger LOG = LoggerFactory.getLogger(IdpTokenService.class);
 
     String GRANT_TYPE = "grant_type";
     String CLIENT_ID = "client_id";
@@ -80,12 +79,11 @@ public interface IdpTokenService {
      * @return The access token as a String
      */
     default String fetchTokenWithResilience(String managementNodeId) {
-        LOG.debug("management nodeid",managementNodeId);
-
         final String componentName = "idp-token-service";
+        final String operation = "fetch token";
         Supplier<String> supplier = () -> fetchToken(managementNodeId);
         try {
-            return ResilienceSupport.decorateAndExecute(componentName, supplier);
+            return ResilienceSupport.decorateAndExecute(componentName, operation, managementNodeId, supplier);
         } catch (RuntimeException ex) {
             throw new FederatorTokenException(
                     "Failed to fetch token after resilience protections for management node: " + managementNodeId, ex);

@@ -126,8 +126,6 @@ public class FederatorClient {
      */
     private static void initProperties() {
         final String envProps = System.getenv(ENV_CLIENT_PROPS);
-        LOGGER.debug("env props", envProps);
-
         if (envProps != null) {
             final File file = new File(envProps);
             if (file.exists()) {
