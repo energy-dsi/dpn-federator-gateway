@@ -81,7 +81,7 @@ public class GRPCServer implements AutoCloseable {
     private ServerCredentials creds;
     private GRPCFederatorService grpcFederatorService;
 
-    public GRPCServer(Set<String> sharedHeaders) {
+    /*public GRPCServer(Set<String> sharedHeaders) {
         grpcFederatorService = new GRPCFederatorService(sharedHeaders);
         if (PropertyUtil.getPropertyBooleanValue(SERVER_MTLS_ENABLED, FALSE)) {
             creds = generateServerCredentials();
@@ -90,6 +90,10 @@ public class GRPCServer implements AutoCloseable {
             LOGGER.warn("Server TLS is not enabled, using insecure server.");
             server = generateServer(sharedHeaders);
         }
+    }*/
+    public GRPCServer(Set<String> sharedHeaders) {
+        creds = generateServerCredentials();
+        server = generateSecureServer(creds, sharedHeaders);
     }
 
     private Server generateSecureServer(ServerCredentials creds, Set<String> sharedHeaders) {
@@ -135,10 +139,29 @@ public class GRPCServer implements AutoCloseable {
         KeyManager[] keyManagerFromP12 = SSLUtils.createKeyManagerFromP12(p12FilePath, p12Password);
         TrustManager[] trustManager = SSLUtils.createTrustManager(trustStoreFilePath, trustStorePassword);
 
-        TlsServerCredentials.Builder tlsBuilder = TlsServerCredentials.newBuilder()
+        /*TlsServerCredentials.Builder tlsBuilder = TlsServerCredentials.newBuilder()
                 .keyManager(keyManagerFromP12)
                 .trustManager(trustManager)
                 .clientAuth(TlsServerCredentials.ClientAuth.REQUIRE);
+
+        return tlsBuilder.build();*/
+
+        /*  The following code is modified to enable Client auth from mTLS enabled parameter */
+        boolean mtlsEnabled =
+                PropertyUtil.getPropertyBooleanValue(SERVER_MTLS_ENABLED, FALSE);
+
+        LOGGER.info("mtlsEnabled found as={}", mtlsEnabled);
+
+        TlsServerCredentials.Builder tlsBuilder =
+                TlsServerCredentials.newBuilder()
+                        .keyManager(keyManagerFromP12);
+        if (mtlsEnabled) {
+            tlsBuilder
+                    .trustManager(trustManager)
+                    .clientAuth(TlsServerCredentials.ClientAuth.REQUIRE);
+        } else {
+            tlsBuilder.clientAuth(TlsServerCredentials.ClientAuth.NONE);
+        }
 
         return tlsBuilder.build();
     }

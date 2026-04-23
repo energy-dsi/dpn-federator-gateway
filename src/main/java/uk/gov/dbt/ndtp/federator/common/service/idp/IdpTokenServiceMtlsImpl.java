@@ -28,6 +28,8 @@ public class IdpTokenServiceMtlsImpl extends AbstractIdpTokenService {
     private static final String MANAGEMENT_NODE_DEFAULT_ID = "default";
     private final String idpTokenUrl;
     private final String idpClientId;
+/****  This is for client secret ****/    
+    private final String idpClientSecret;
 
     public IdpTokenServiceMtlsImpl(HttpClient httpClient, ObjectMapper objectMapper) {
         super(
@@ -37,7 +39,26 @@ public class IdpTokenServiceMtlsImpl extends AbstractIdpTokenService {
         Properties properties = PropertyUtil.getPropertiesFromFilePath(COMMON_CONFIG_PROPERTIES);
         this.idpTokenUrl = properties.getProperty("idp.token.url");
         this.idpClientId = properties.getProperty("idp.client.id");
+/*  This is combined client secret + mTLS */
+        this.idpClientSecret = properties.getProperty("idp.client.secret");
+
+// Validation + log what we can safely show
+        if (idpTokenUrl == null || idpTokenUrl.isBlank()) {
+            log.error("IDP token URL is missing (property 'idp.token.url').");
+        }
+        if (idpClientId == null || idpClientId.isBlank()) {
+            log.error("IDP client ID is missing (property 'idp.client.id').");
+        }
+        if (idpClientSecret == null || idpClientSecret.isBlank()) {
+            log.warn("IDP client secret is missing (property 'idp.client.secret').");
+        }
+
+        log.info("IDP token service initialised. tokenUrl='{}', clientId='{}', secretPresent={}",
+                idpTokenUrl, idpClientId, idpClientSecret != null && !idpClientSecret.isBlank());
+
+
     }
+
 
     @Override
     public String fetchToken() {
@@ -73,8 +94,8 @@ public class IdpTokenServiceMtlsImpl extends AbstractIdpTokenService {
             }
 
             String body =
-                    GRANT_TYPE + EQUALS_SIGN + CLIENT_CREDENTIALS + AMPERSAND + CLIENT_ID + EQUALS_SIGN + idpClientId;
-
+/*                    GRANT_TYPE + EQUALS_SIGN + CLIENT_CREDENTIALS + AMPERSAND + CLIENT_ID + EQUALS_SIGN + idpClientId; */
+                    GRANT_TYPE + EQUALS_SIGN + CLIENT_CREDENTIALS + AMPERSAND + CLIENT_ID + EQUALS_SIGN + idpClientId + AMPERSAND +  CLIENT_SECRET + EQUALS_SIGN + idpClientSecret;
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(idpTokenUrl))
                     .header(HEADER_CONTENT_TYPE, CONTENT_TYPE_FORM_URLENCODED)
