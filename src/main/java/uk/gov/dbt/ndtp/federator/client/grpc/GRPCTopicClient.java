@@ -129,8 +129,11 @@ public class GRPCTopicClient extends GRPCAbstractClient {
         LOGGER.debug("Sent event");
     }
 
-    public static KafkaSink<Bytes, Bytes> getSender(String topic, String topicPrefix, String serverName) {
-        return KafkaUtil.getKafkaSink(concatCompoundTopicName(topic, topicPrefix, serverName));
+    public static KafkaSink<Bytes, Bytes> getSender(String topic, String targetTopic, String serverName) {
+        if (targetTopic != null && !targetTopic.isEmpty()) {
+            return KafkaUtil.getKafkaSink(targetTopic);
+        }
+        return KafkaUtil.getKafkaSink(serverName + "-" + topic);
     }
 
     public static String concatCompoundTopicName(String topic, String topicPrefix, String serverName) {

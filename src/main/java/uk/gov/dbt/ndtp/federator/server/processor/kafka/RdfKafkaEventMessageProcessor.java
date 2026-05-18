@@ -78,7 +78,7 @@ public class RdfKafkaEventMessageProcessor implements MessageProcessor<KafkaEven
                     .setOffset(offset)
                     .setValue(byteStringValue)
                     .setKey(byteStringKey)
-                    .addAllShared(selectHeaders(kafkaEvent.headers(), sharedHeaders))
+                    .addAllShared(selectHeaders(kafkaEvent.headers()))
                     .build();
 
             serverCallStreamObserver.onNext(response);

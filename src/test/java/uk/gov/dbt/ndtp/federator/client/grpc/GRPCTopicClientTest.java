@@ -81,16 +81,16 @@ class GRPCTopicClientTest {
     }
 
     @Test
-    void getSenderWithTopicPrefix() {
+    void getSenderWithTargetTopic() {
         try (MockedStatic<KafkaUtil> kafka = mockStatic(KafkaUtil.class)) {
             kafka.when(() -> KafkaUtil.getKafkaSink(any())).thenReturn(mock(KafkaSink.class));
             GRPCTopicClient.getSender(TOPIC_NAME, TOPIC_PREFIX, SERVER_NAME);
-            kafka.verify(() -> KafkaUtil.getKafkaSink("TEST_TOPIC_PREFIX-TEST_SERVER_NAME-TEST_TOPIC_NAME"));
+            kafka.verify(() -> KafkaUtil.getKafkaSink("TEST_TOPIC_PREFIX"));
         }
     }
 
     @Test
-    void getSenderWithoutTopicPrefix() {
+    void getSenderWithoutTargetTopic() {
         try (MockedStatic<KafkaUtil> kafka = mockStatic(KafkaUtil.class)) {
             kafka.when(() -> KafkaUtil.getKafkaSink(any())).thenReturn(mock(KafkaSink.class));
             GRPCTopicClient.getSender(TOPIC_NAME, "", SERVER_NAME);

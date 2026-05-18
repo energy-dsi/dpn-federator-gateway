@@ -13,6 +13,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
 
@@ -25,6 +26,15 @@ import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
  * and a custom endpoint (e.g., fake-gcs-server/local), without making any network calls.
  */
 class GcsClientFactoryTest {
+
+    @BeforeEach
+    void setUp() {
+        try {
+            PropertyUtil.clear();
+        } catch (Exception ignored) {
+            // ignore if not initialized
+        }
+    }
 
     @AfterEach
     void tearDown() {

@@ -50,9 +50,18 @@ class GRPCServerTest {
             propertyUtilMockedStatic
                     .when(() -> PropertyUtil.getPropertiesFromFilePath(any()))
                     .thenReturn(mockNestedProps);
+            propertyUtilMockedStatic
+                    .when(() -> PropertyUtil.getPropertyValue(any()))
+                    .thenReturn("dummy");
 
             sslUtilsMockedStatic
-                    .when(() -> SSLUtils.createSSLContext(anyString(), anyString(), anyString(), anyString()))
+                    .when(() -> SSLUtils.createKeyManagerFromP12(any(String.class), any(String.class)))
+                    .thenReturn(new KeyManager[] {mock(X509KeyManager.class)});
+            sslUtilsMockedStatic
+                    .when(() -> SSLUtils.createTrustManager(any(String.class), any(String.class)))
+                    .thenReturn(new TrustManager[] {mock(X509TrustManager.class)});
+            sslUtilsMockedStatic
+                    .when(() -> SSLUtils.createSSLContext(any(String.class), any(String.class), any(String.class), any(String.class)))
                     .thenReturn(mock(SSLContext.class));
 
             ServerBuilder<?> serverBuilder = mock(ServerBuilder.class, Mockito.RETURNS_SELF);

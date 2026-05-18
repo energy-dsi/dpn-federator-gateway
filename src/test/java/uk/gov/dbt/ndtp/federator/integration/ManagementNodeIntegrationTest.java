@@ -245,6 +245,8 @@ class ManagementNodeIntegrationTest {
 
     private void initializeServices() {
         scheduler = mock(JobSchedulerProvider.class);
+        org.jobrunr.scheduling.JobScheduler mockJobScheduler = mock(org.jobrunr.scheduling.JobScheduler.class);
+        when(scheduler.getJobScheduler()).thenReturn(mockJobScheduler);
         createConfigurationServices();
     }
 
