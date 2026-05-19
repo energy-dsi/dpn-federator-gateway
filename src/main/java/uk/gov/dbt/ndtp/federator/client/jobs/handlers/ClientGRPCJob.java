@@ -18,7 +18,7 @@ import uk.gov.dbt.ndtp.federator.exceptions.ClientGRPCJobException;
 @Slf4j
 public class ClientGRPCJob implements Job {
 
-    static final String KAFKA_TOPIC_PREFIX = ".topic.prefix";
+    static final String FEDERATOR_CLIENT_TARGET_TOPIC = "federator-client-target-topic";
 
     // Injected collaborators for testability (property-settable)
     @Setter
@@ -35,7 +35,7 @@ public class ClientGRPCJob implements Job {
 
     /** Default constructor wires real implementations for backward compatibility. */
     public ClientGRPCJob() {
-        this.prefixSupplier = () -> PropertyUtil.getPropertyValue(KAFKA_TOPIC_PREFIX, "");
+        this.prefixSupplier = () -> PropertyUtil.getPropertyValue(FEDERATOR_CLIENT_TARGET_TOPIC, "");
         this.offsetProvider = (prefix, topic) -> RedisUtil.getInstance().getOffset(prefix, topic);
         this.clientFactory = (config, prefix) -> new WrappedGRPCClient(new GRPCTopicClient(config, prefix));
     }
