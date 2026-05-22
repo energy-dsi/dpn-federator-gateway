@@ -33,9 +33,13 @@ import java.io.FileInputStream;
 import java.io.InputStream;
 import java.net.URISyntaxException;
 import java.time.Duration;
+import java.util.Map;
 import java.util.Properties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import uk.gov.dbt.ndtp.federator.common.service.secret.NoopSecretProvider;
+import uk.gov.dbt.ndtp.federator.common.service.secret.SecretProvider;
+import uk.gov.dbt.ndtp.federator.common.service.secret.VaultSecretProvider;
 
 /**
  * Utility class to load properties from a file or resource.
@@ -52,6 +56,8 @@ import org.slf4j.LoggerFactory;
 public class PropertyUtil {
 
     public static final Logger LOGGER = LoggerFactory.getLogger("PropertyUtil");
+    public static final String VAULT_URI = "vault.uri";
+    public static final String ENV_VAULT_TOKEN = "VAULT_TOKEN";
 
     private static PropertyUtil instance;
     public final Properties properties;
@@ -64,6 +70,23 @@ public class PropertyUtil {
             throw new PropertyUtilException("Error loading properties from inputStream", t);
         }
         overrideSystemProperties(properties);
+
+        Properties commonProperties = getPropertiesFromFileName(properties.getProperty(GRPCUtils.COMMON_CONFIG_PROPERTIES));
+        String vaultUri = commonProperties.getProperty(VAULT_URI);
+
+        // Get token from ENV
+        String vaultToken = System.getenv(ENV_VAULT_TOKEN);
+
+        SecretProvider vaultSecretProvider = createVaultSecretProvider(vaultUri, vaultToken);
+        overrideWithSecrets(properties, vaultSecretProvider);
+    }
+
+    public static SecretProvider createVaultSecretProvider(String  vaultUri, String vaultToken) {
+        SecretProvider provider = (vaultUri != null && vaultToken != null)
+                ? new VaultSecretProvider(vaultUri, vaultToken)
+                : new NoopSecretProvider();
+
+        return provider;
     }
 
     public static boolean initializeProperties() {
@@ -232,6 +255,57 @@ public class PropertyUtil {
         }
     }
 
+    public static File getPropertyFileNameValue(String fileName) {
+        try {
+            ClassLoader loader = Thread.currentThread().getContextClassLoader();
+            return new File(loader.getResource(fileName).toURI());
+        } catch (URISyntaxException | NullPointerException e) {
+            throw new PropertyUtilException(e);
+        }
+    }
+
+    /**
+     * Loads a properties file specified by the file name. The method will first attempt to load the properties from the absolute
+     * file path, and if that fails, it will attempt to load it from the classpath resource.
+     *
+     * @param fileName the file path or classpath resource
+     * @return the loaded properties
+     * @throws PropertyUtilException if the properties cannot be loaded from either location
+     */
+    public static Properties getPropertiesFromFileName(String fileName) {
+        Properties nestedProperties = new Properties();
+
+        // First try absolute path
+        File absoluteFile = new File(fileName);
+        if (absoluteFile.isFile() && absoluteFile.canRead()) {
+            try (FileInputStream fis = new FileInputStream(absoluteFile)) {
+                nestedProperties.load(fis);
+                return nestedProperties;
+            } catch (Exception e) {
+                LOGGER.warn(
+                        "Failed reading properties from absolute path '{}', attempting classpath resource",
+                        absoluteFile.getAbsolutePath(),
+                        e);
+            }
+        } else {
+            LOGGER.info("Absolute path '{}' not valid, attempting classpath resource", absoluteFile.getPath());
+        }
+
+        // Fallback: try classpath resource
+        try {
+            File resourceFile = getPropertyFileNameValue(fileName);
+            try (FileInputStream fis = new FileInputStream(resourceFile)) {
+                nestedProperties.load(fis);
+                return nestedProperties;
+            }
+        } catch (Exception e) {
+            throw new PropertyUtilException(
+                    "Failed to load properties for file '" + fileName + "' from absolute path '"
+                            + absoluteFile.getPath() + "' or classpath resource '" + fileName + "'",
+                    e);
+        }
+    }
+
     public static Properties getByPrefix(String prefix) {
         if (prefix == null) {
             throw new PropertyUtilException("The prefix to search for must not be null");
@@ -278,6 +352,53 @@ public class PropertyUtil {
             }
         }
     }
+
+    public static void overrideWithSecrets(Properties properties, SecretProvider provider) {
+
+        if (!provider.isEnabled()) {
+            LOGGER.info("Vault not configured or token missing, skipping secret override");
+            return;
+        }
+
+        LOGGER.info("Vault enabled (root token), applying secret overrides");
+
+        for (Map.Entry<String, String> entry : VaultMappings.KEY_TO_VAULT_PATH.entrySet()) {
+
+            String propertyKey = entry.getKey();
+            String mapping = entry.getValue();
+
+            if (!properties.containsKey(propertyKey)) continue;
+
+            String[] parts = mapping.split("#");
+            String path = parts[0];
+            String key = parts[1];
+
+            try {
+                String secret = provider.getSecret(path, key);
+
+                if (secret != null) {
+                    properties.put(propertyKey, secret);
+                    LOGGER.info("Overrode '{}' from Vault", propertyKey);
+                }
+
+            } catch (Exception e) {
+                LOGGER.error("Failed to load secret for {}", propertyKey, e);
+            }
+        }
+    }
+
+    public class VaultMappings {
+
+        public static final Map<String, String> KEY_TO_VAULT_PATH = Map.of(
+                "client.p12Password", "node-net/client/keystore-password#password",
+                "client.truststorePassword", "node-net/client/truststore-password#password",
+                "server.p12Password", "node-net/client/keystore-password#password",
+                "server.truststorePassword", "node-net/client/truststore-password#password",
+                "idp.keystore.password", "node-net/client/keystore-password#password",
+                "idp.truststore.password", "node-net/client/truststore-password#password"
+        );
+    }
+
 
     public static class PropertyUtilException extends RuntimeException {
         public PropertyUtilException(String message) {

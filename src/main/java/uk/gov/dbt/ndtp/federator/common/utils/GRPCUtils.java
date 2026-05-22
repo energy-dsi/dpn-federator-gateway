@@ -4,6 +4,8 @@
 package uk.gov.dbt.ndtp.federator.common.utils;
 
 import static uk.gov.dbt.ndtp.federator.client.grpc.GRPCClient.*;
+import static uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil.ENV_VAULT_TOKEN;
+import static uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil.VAULT_URI;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.grpc.ChannelCredentials;
@@ -20,6 +22,7 @@ import org.slf4j.LoggerFactory;
 import uk.gov.dbt.ndtp.federator.common.service.idp.IdpTokenService;
 import uk.gov.dbt.ndtp.federator.common.service.idp.IdpTokenServiceClientSecretImpl;
 import uk.gov.dbt.ndtp.federator.common.service.idp.IdpTokenServiceMtlsImpl;
+import uk.gov.dbt.ndtp.federator.common.service.secret.SecretProvider;
 
 public class GRPCUtils {
     public static final String COMMON_CONFIG_PROPERTIES = "common.configuration";
@@ -34,6 +37,15 @@ public class GRPCUtils {
     public static IdpTokenService createIdpTokenService() {
 
         Properties properties = PropertyUtil.getPropertiesFromFilePath(COMMON_CONFIG_PROPERTIES);
+
+        String vaultUri = properties.getProperty(VAULT_URI);
+
+        // Get token from ENV
+        String vaultToken = System.getenv(ENV_VAULT_TOKEN);
+
+        SecretProvider vaultSecretProvider = PropertyUtil.createVaultSecretProvider(vaultUri, vaultToken);
+        PropertyUtil.overrideWithSecrets(properties, vaultSecretProvider);
+
         boolean isMtlsEnabled = Boolean.parseBoolean(properties.getProperty(IDP_MTLS_ENABLED_PROPERTY, "false"));
         LOGGER.warn("===========Idp mTLS enabled: {}============", isMtlsEnabled);
 
