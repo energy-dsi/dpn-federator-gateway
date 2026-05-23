@@ -13,7 +13,11 @@ import java.util.Properties;
 import uk.gov.dbt.ndtp.federator.common.management.ManagementNodeDataHandler;
 import uk.gov.dbt.ndtp.federator.common.service.config.ProducerConfigService;
 import uk.gov.dbt.ndtp.federator.common.service.idp.IdpTokenService;
+import uk.gov.dbt.ndtp.federator.common.service.secret.SecretProvider;
 import uk.gov.dbt.ndtp.federator.common.storage.InMemoryConfigurationStore;
+
+import static uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil.ENV_VAULT_TOKEN;
+import static uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil.VAULT_URI;
 
 public class ProducerConsumerConfigServiceFactory {
     private static final String COMMON_CONFIG_PROPERTIES = "common.configuration";
@@ -32,6 +36,14 @@ public class ProducerConsumerConfigServiceFactory {
             synchronized (ProducerConsumerConfigServiceFactory.class) {
                 ObjectMapper mapper = ObjectMapperUtil.getInstance();
                 Properties properties = PropertyUtil.getPropertiesFromFilePath(COMMON_CONFIG_PROPERTIES);
+                String vaultUri = properties.getProperty(VAULT_URI);
+
+                // Get token from ENV
+                String vaultToken = System.getenv(ENV_VAULT_TOKEN);
+
+                SecretProvider vaultSecretProvider = PropertyUtil.createVaultSecretProvider(vaultUri, vaultToken);
+                PropertyUtil.overrideWithSecrets(properties, vaultSecretProvider);
+
                 IdpTokenService tokenService = GRPCUtils.createIdpTokenService();
                 HttpClient httpClient = HttpClientFactoryUtils.createHttpClientWithMtls(properties);
                 var managementNodeDataHandler = new ManagementNodeDataHandler(httpClient, mapper, tokenService);

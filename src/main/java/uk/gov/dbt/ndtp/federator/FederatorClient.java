@@ -40,12 +40,16 @@ import uk.gov.dbt.ndtp.federator.client.jobs.handlers.ClientDynamicConfigJob;
 import uk.gov.dbt.ndtp.federator.common.management.ManagementNodeDataHandler;
 import uk.gov.dbt.ndtp.federator.common.service.config.ConsumerConfigService;
 import uk.gov.dbt.ndtp.federator.common.service.idp.IdpTokenService;
+import uk.gov.dbt.ndtp.federator.common.service.secret.SecretProvider;
 import uk.gov.dbt.ndtp.federator.common.storage.InMemoryConfigurationStore;
 import uk.gov.dbt.ndtp.federator.common.utils.GRPCUtils;
 import uk.gov.dbt.ndtp.federator.common.utils.HttpClientFactoryUtils;
 import uk.gov.dbt.ndtp.federator.common.utils.ObjectMapperUtil;
 import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
 import uk.gov.dbt.ndtp.federator.exceptions.ConfigurationException;
+
+import static uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil.ENV_VAULT_TOKEN;
+import static uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil.VAULT_URI;
 
 /**
  * Main class for the Federator client.
@@ -166,6 +170,15 @@ public class FederatorClient {
      */
     private static HttpClient createHttpClient() {
         final Properties props = PropertyUtil.getPropertiesFromFilePath(COMMON_CONFIG);
+
+        String vaultUri = props.getProperty(VAULT_URI);
+
+        // Get token from ENV
+        String vaultToken = System.getenv(ENV_VAULT_TOKEN);
+
+        SecretProvider vaultSecretProvider = PropertyUtil.createVaultSecretProvider(vaultUri, vaultToken);
+        PropertyUtil.overrideWithSecrets(props, vaultSecretProvider);
+
         try {
 
             return HttpClientFactoryUtils.createHttpClientWithMtls(props);
