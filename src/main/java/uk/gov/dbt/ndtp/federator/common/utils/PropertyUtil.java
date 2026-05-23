@@ -57,7 +57,11 @@ public class PropertyUtil {
 
     public static final Logger LOGGER = LoggerFactory.getLogger("PropertyUtil");
     public static final String VAULT_URI = "vault.uri";
+    public static final String VAULT_TRUSTSTORE_PATH = "vault.truststore.path";
+    public static final String VAULT_TRUSTSTORE_PASSWORD = "vault.truststore.password";
     public static final String ENV_VAULT_TOKEN = "VAULT_TOKEN";
+    public static final String ENV_VAULT_KEYSTORE_PASSWORD_PATH = "VAULT_KEYSTORE_PASSWORD_PATH";
+    public static final String ENV_VAULT_TRUSTSTORE_PASSWORD_PATH = "VAULT_TRUSTSTORE_PASSWORD_PATH";
 
     private static PropertyUtil instance;
     public final Properties properties;
@@ -72,18 +76,22 @@ public class PropertyUtil {
         overrideSystemProperties(properties);
 
         Properties commonProperties = getPropertiesFromFileName(properties.getProperty(GRPCUtils.COMMON_CONFIG_PROPERTIES));
-        String vaultUri = commonProperties.getProperty(VAULT_URI);
+
+        SecretProvider vaultSecretProvider = createSecretProvider(commonProperties);
+        overrideWithSecrets(properties, vaultSecretProvider);
+    }
+
+    public static SecretProvider createSecretProvider(Properties properties) {
+
+        String vaultUri = properties.getProperty(VAULT_URI);
+        String vaultTruststorePath = properties.getProperty(VAULT_TRUSTSTORE_PATH);
+        String vaultTruststorePassword = properties.getProperty(VAULT_TRUSTSTORE_PASSWORD);
 
         // Get token from ENV
         String vaultToken = System.getenv(ENV_VAULT_TOKEN);
 
-        SecretProvider vaultSecretProvider = createVaultSecretProvider(vaultUri, vaultToken);
-        overrideWithSecrets(properties, vaultSecretProvider);
-    }
-
-    public static SecretProvider createVaultSecretProvider(String  vaultUri, String vaultToken) {
         SecretProvider provider = (vaultUri != null && vaultToken != null)
-                ? new VaultSecretProvider(vaultUri, vaultToken)
+                ? new VaultSecretProvider(vaultUri, vaultToken, vaultTruststorePath, vaultTruststorePassword)
                 : new NoopSecretProvider();
 
         return provider;
@@ -356,11 +364,11 @@ public class PropertyUtil {
     public static void overrideWithSecrets(Properties properties, SecretProvider provider) {
 
         if (!provider.isEnabled()) {
-            LOGGER.info("Vault not configured or token missing, skipping secret override");
+            LOGGER.info("Secret provider not configured or parameter missing, skipping secret override");
             return;
         }
 
-        LOGGER.info("Vault enabled (root token), applying secret overrides");
+        LOGGER.info("Secret provider enabled, applying secret overrides");
 
         for (Map.Entry<String, String> entry : VaultMappings.KEY_TO_VAULT_PATH.entrySet()) {
 
@@ -390,15 +398,22 @@ public class PropertyUtil {
     public class VaultMappings {
 
         public static final Map<String, String> KEY_TO_VAULT_PATH = Map.of(
-                "client.p12Password", "node-net/client/keystore-password#password",
-                "client.truststorePassword", "node-net/client/truststore-password#password",
-                "server.p12Password", "node-net/client/keystore-password#password",
-                "server.truststorePassword", "node-net/client/truststore-password#password",
-                "idp.keystore.password", "node-net/client/keystore-password#password",
-                "idp.truststore.password", "node-net/client/truststore-password#password"
+                "client.p12Password", getEnv(ENV_VAULT_KEYSTORE_PASSWORD_PATH),
+                "client.truststorePassword", getEnv(ENV_VAULT_TRUSTSTORE_PASSWORD_PATH),
+                "server.p12Password", getEnv(ENV_VAULT_KEYSTORE_PASSWORD_PATH),
+                "server.truststorePassword", getEnv(ENV_VAULT_TRUSTSTORE_PASSWORD_PATH),
+                "idp.keystore.password", getEnv(ENV_VAULT_KEYSTORE_PASSWORD_PATH),
+                "idp.truststore.password", getEnv(ENV_VAULT_TRUSTSTORE_PASSWORD_PATH)
         );
-    }
 
+        private static String getEnv(String key) {
+            String value = System.getenv(key);
+            if (value == null) {
+                throw new RuntimeException("Missing required env var: " + key);
+            }
+            return value;
+        }
+    }
 
     public static class PropertyUtilException extends RuntimeException {
         public PropertyUtilException(String message) {

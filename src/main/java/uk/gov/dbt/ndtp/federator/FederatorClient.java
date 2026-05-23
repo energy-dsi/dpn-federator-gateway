@@ -40,6 +40,7 @@ import uk.gov.dbt.ndtp.federator.client.jobs.handlers.ClientDynamicConfigJob;
 import uk.gov.dbt.ndtp.federator.common.management.ManagementNodeDataHandler;
 import uk.gov.dbt.ndtp.federator.common.service.config.ConsumerConfigService;
 import uk.gov.dbt.ndtp.federator.common.service.idp.IdpTokenService;
+import uk.gov.dbt.ndtp.federator.common.service.secret.SecretProvider;
 import uk.gov.dbt.ndtp.federator.common.storage.InMemoryConfigurationStore;
 import uk.gov.dbt.ndtp.federator.common.utils.GRPCUtils;
 import uk.gov.dbt.ndtp.federator.common.utils.HttpClientFactoryUtils;
@@ -166,6 +167,10 @@ public class FederatorClient {
      */
     private static HttpClient createHttpClient() {
         final Properties props = PropertyUtil.getPropertiesFromFilePath(COMMON_CONFIG);
+
+        SecretProvider secretProvider = PropertyUtil.createSecretProvider(props);
+        PropertyUtil.overrideWithSecrets(props, secretProvider);
+
         try {
 
             return HttpClientFactoryUtils.createHttpClientWithMtls(props);
