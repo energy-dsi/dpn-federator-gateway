@@ -171,13 +171,8 @@ public class FederatorClient {
     private static HttpClient createHttpClient() {
         final Properties props = PropertyUtil.getPropertiesFromFilePath(COMMON_CONFIG);
 
-        String vaultUri = props.getProperty(VAULT_URI);
-
-        // Get token from ENV
-        String vaultToken = System.getenv(ENV_VAULT_TOKEN);
-
-        SecretProvider vaultSecretProvider = PropertyUtil.createVaultSecretProvider(vaultUri, vaultToken);
-        PropertyUtil.overrideWithSecrets(props, vaultSecretProvider);
+        SecretProvider secretProvider = PropertyUtil.createSecretProvider(props);
+        PropertyUtil.overrideWithSecrets(props, secretProvider);
 
         try {
 

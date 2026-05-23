@@ -38,13 +38,8 @@ public class GRPCUtils {
 
         Properties properties = PropertyUtil.getPropertiesFromFilePath(COMMON_CONFIG_PROPERTIES);
 
-        String vaultUri = properties.getProperty(VAULT_URI);
-
-        // Get token from ENV
-        String vaultToken = System.getenv(ENV_VAULT_TOKEN);
-
-        SecretProvider vaultSecretProvider = PropertyUtil.createVaultSecretProvider(vaultUri, vaultToken);
-        PropertyUtil.overrideWithSecrets(properties, vaultSecretProvider);
+        SecretProvider secretProvider = PropertyUtil.createSecretProvider(properties);
+        PropertyUtil.overrideWithSecrets(properties, secretProvider);
 
         boolean isMtlsEnabled = Boolean.parseBoolean(properties.getProperty(IDP_MTLS_ENABLED_PROPERTY, "false"));
         LOGGER.warn("===========Idp mTLS enabled: {}============", isMtlsEnabled);

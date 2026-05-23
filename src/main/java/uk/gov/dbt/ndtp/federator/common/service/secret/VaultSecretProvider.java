@@ -4,9 +4,9 @@ public class VaultSecretProvider implements SecretProvider {
 
     private final VaultClient client;
 
-    public VaultSecretProvider(String uri, String token) {
+    public VaultSecretProvider(String uri, String token, String truststorePath, String truststorePassword) {
         try {
-            this.client = new VaultClient(uri, token);
+            this.client = new VaultClient(uri, token, truststorePath, truststorePassword);
         } catch (Exception e) {
             throw new RuntimeException(e);
         }

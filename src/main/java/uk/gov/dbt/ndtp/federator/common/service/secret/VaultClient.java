@@ -1,17 +1,42 @@
 package uk.gov.dbt.ndtp.federator.common.service.secret;
 
+import com.bettercloud.vault.SslConfig;
 import com.bettercloud.vault.Vault;
 import com.bettercloud.vault.VaultConfig;
 import com.bettercloud.vault.response.LogicalResponse;
 
+import java.io.FileInputStream;
+import java.security.KeyStore;
+
 public class VaultClient {
+
+    private static final String KEYSTORE_TYPE_JKS = "JKS";
 
     private final Vault vault;
 
-    public VaultClient(String vaultAddr, String token) throws Exception {
+    public VaultClient(String vaultAddr, String token, String trustStorePath, String trustStorePassword) throws Exception {
+
+        // Load truststore manually
+        KeyStore trustStore = KeyStore.getInstance(KEYSTORE_TYPE_JKS);
+
+        try (FileInputStream fis = new FileInputStream(trustStorePath)) {
+            trustStore.load(fis, trustStorePassword.toCharArray());
+        } catch (Exception e) {
+            trustStore = null;
+        }
+
+        // Configure SSL for Vault
+        SslConfig sslConfig = null;
+        if (trustStore != null) {
+            sslConfig = new SslConfig()
+                    .trustStore(trustStore)
+                    .build();
+        }
+
         VaultConfig config = new VaultConfig()
                 .address(vaultAddr)
                 .token(token)
+                .sslConfig(sslConfig)
                 .build();
 
         this.vault = new Vault(config);

@@ -36,13 +36,9 @@ public class ProducerConsumerConfigServiceFactory {
             synchronized (ProducerConsumerConfigServiceFactory.class) {
                 ObjectMapper mapper = ObjectMapperUtil.getInstance();
                 Properties properties = PropertyUtil.getPropertiesFromFilePath(COMMON_CONFIG_PROPERTIES);
-                String vaultUri = properties.getProperty(VAULT_URI);
 
-                // Get token from ENV
-                String vaultToken = System.getenv(ENV_VAULT_TOKEN);
-
-                SecretProvider vaultSecretProvider = PropertyUtil.createVaultSecretProvider(vaultUri, vaultToken);
-                PropertyUtil.overrideWithSecrets(properties, vaultSecretProvider);
+                SecretProvider secretProvider = PropertyUtil.createSecretProvider(properties);
+                PropertyUtil.overrideWithSecrets(properties, secretProvider);
 
                 IdpTokenService tokenService = GRPCUtils.createIdpTokenService();
                 HttpClient httpClient = HttpClientFactoryUtils.createHttpClientWithMtls(properties);
