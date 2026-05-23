@@ -48,9 +48,6 @@ import uk.gov.dbt.ndtp.federator.common.utils.ObjectMapperUtil;
 import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
 import uk.gov.dbt.ndtp.federator.exceptions.ConfigurationException;
 
-import static uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil.ENV_VAULT_TOKEN;
-import static uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil.VAULT_URI;
-
 /**
  * Main class for the Federator client.
  *

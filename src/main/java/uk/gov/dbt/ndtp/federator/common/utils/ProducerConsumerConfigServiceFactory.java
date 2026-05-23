@@ -16,9 +16,6 @@ import uk.gov.dbt.ndtp.federator.common.service.idp.IdpTokenService;
 import uk.gov.dbt.ndtp.federator.common.service.secret.SecretProvider;
 import uk.gov.dbt.ndtp.federator.common.storage.InMemoryConfigurationStore;
 
-import static uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil.ENV_VAULT_TOKEN;
-import static uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil.VAULT_URI;
-
 public class ProducerConsumerConfigServiceFactory {
     private static final String COMMON_CONFIG_PROPERTIES = "common.configuration";
     private static ProducerConfigService producerConfigService;
