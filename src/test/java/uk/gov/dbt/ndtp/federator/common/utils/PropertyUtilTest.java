@@ -37,6 +37,7 @@ import java.util.Properties;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import uk.gov.dbt.ndtp.federator.common.service.secret.NoopSecretProvider;
 
 class PropertyUtilTest {
 
@@ -48,6 +49,7 @@ class PropertyUtilTest {
 
     @BeforeEach
     void prepare() {
+        PropertyUtil.providerOverrideForTest = new NoopSecretProvider();
         PropertyUtil.clear();
         PropertyUtil.init(VALID_FILE);
     }

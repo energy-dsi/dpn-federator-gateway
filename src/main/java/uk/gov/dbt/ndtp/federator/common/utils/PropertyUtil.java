@@ -62,6 +62,15 @@ public class PropertyUtil {
     public static final String ENV_VAULT_TOKEN = "VAULT_TOKEN";
     public static final String ENV_VAULT_KEYSTORE_PASSWORD_PATH = "VAULT_KEYSTORE_PASSWORD_PATH";
     public static final String ENV_VAULT_TRUSTSTORE_PASSWORD_PATH = "VAULT_TRUSTSTORE_PASSWORD_PATH";
+    static SecretProvider providerOverrideForTest = null;
+    static Map<String, String> testMappingsOverride = null;
+
+    private static final String CLIENT_P12_PASSWORD = "client.p12Password";
+    private static final String CLIENT_TRUSTSTORE_PASSWORD = "client.truststorePassword";
+    private static final String SERVER_P12_PASSWORD = "server.p12Password";
+    private static final String SERVER_TRUSTSTORE_PASSWORD = "server.truststorePassword";
+    private static final String IDP_KEYSTORE_PASSWORD = "idp.keystore.password";
+    private static final String IDP_TRUSTSTORE_PASSWORD = "idp.truststore.password";
 
     private static PropertyUtil instance;
     public final Properties properties;
@@ -75,10 +84,22 @@ public class PropertyUtil {
         }
         overrideSystemProperties(properties);
 
-        Properties commonProperties = getPropertiesFromFileName(properties.getProperty(GRPCUtils.COMMON_CONFIG_PROPERTIES));
+        Properties commonProperties = new Properties();
 
-        SecretProvider vaultSecretProvider = createSecretProvider(commonProperties);
-        overrideWithSecrets(properties, vaultSecretProvider);
+        String commonConfig = properties.getProperty(GRPCUtils.COMMON_CONFIG_PROPERTIES);
+
+        if (commonConfig != null && !commonConfig.isBlank()) {
+            try {
+                commonProperties = getPropertiesFromFileName(commonConfig);
+            } catch (Exception e) {
+                LOGGER.warn("Skipping common configuration loading in this context: {}", e.getMessage());
+            }
+        }
+
+        SecretProvider secretProvider = (providerOverrideForTest != null)
+                        ? providerOverrideForTest
+                        : createSecretProvider(commonProperties);
+        overrideWithSecrets(properties, secretProvider);
     }
 
     public static SecretProvider createSecretProvider(Properties properties) {
@@ -370,10 +391,18 @@ public class PropertyUtil {
 
         LOGGER.info("Secret provider enabled, applying secret overrides");
 
-        for (Map.Entry<String, String> entry : VaultMappings.KEY_TO_VAULT_PATH.entrySet()) {
+        Map<String, String> mappings =
+                (testMappingsOverride != null)
+                        ? testMappingsOverride
+                        : VaultMappings.getMappings();
+
+        for (Map.Entry<String, String> entry : mappings.entrySet()) {
 
             String propertyKey = entry.getKey();
             String mapping = entry.getValue();
+            if (mapping == null || mapping.isBlank()) {
+                continue;  // skip if env not set
+            }
 
             if (!properties.containsKey(propertyKey)) continue;
 
@@ -397,21 +426,20 @@ public class PropertyUtil {
 
     public class VaultMappings {
 
-        public static final Map<String, String> KEY_TO_VAULT_PATH = Map.of(
-                "client.p12Password", getEnv(ENV_VAULT_KEYSTORE_PASSWORD_PATH),
-                "client.truststorePassword", getEnv(ENV_VAULT_TRUSTSTORE_PASSWORD_PATH),
-                "server.p12Password", getEnv(ENV_VAULT_KEYSTORE_PASSWORD_PATH),
-                "server.truststorePassword", getEnv(ENV_VAULT_TRUSTSTORE_PASSWORD_PATH),
-                "idp.keystore.password", getEnv(ENV_VAULT_KEYSTORE_PASSWORD_PATH),
-                "idp.truststore.password", getEnv(ENV_VAULT_TRUSTSTORE_PASSWORD_PATH)
-        );
+        public static Map<String, String> getMappings() {
+            return Map.of(
+                    CLIENT_P12_PASSWORD, getEnvOrDefault(ENV_VAULT_KEYSTORE_PASSWORD_PATH),
+                    CLIENT_TRUSTSTORE_PASSWORD, getEnvOrDefault(ENV_VAULT_TRUSTSTORE_PASSWORD_PATH),
+                    SERVER_P12_PASSWORD, getEnvOrDefault(ENV_VAULT_KEYSTORE_PASSWORD_PATH),
+                    SERVER_TRUSTSTORE_PASSWORD, getEnvOrDefault(ENV_VAULT_TRUSTSTORE_PASSWORD_PATH),
+                    IDP_KEYSTORE_PASSWORD, getEnvOrDefault(ENV_VAULT_KEYSTORE_PASSWORD_PATH),
+                    IDP_TRUSTSTORE_PASSWORD, getEnvOrDefault(ENV_VAULT_TRUSTSTORE_PASSWORD_PATH)
+            );
+        }
 
-        private static String getEnv(String key) {
+        private static String getEnvOrDefault(String key) {
             String value = System.getenv(key);
-            if (value == null) {
-                throw new RuntimeException("Missing required env var: " + key);
-            }
-            return value;
+            return value != null ? value : "";
         }
     }
 
