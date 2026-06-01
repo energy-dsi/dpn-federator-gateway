@@ -11,6 +11,7 @@ import java.security.KeyStore;
 public class VaultClient {
 
     private static final String KEYSTORE_TYPE_JKS = "JKS";
+    private static final String PKI_MOUNT = "pki-client";
 
     private final Vault vault;
 
@@ -46,7 +47,7 @@ public class VaultClient {
         try {
             // normalize path safely
             String normalizedPath = path.startsWith("/") ? path.substring(1) : path;
-            String fullPath = "pki-client/" + normalizedPath;
+            String fullPath = PKI_MOUNT + "/" + normalizedPath;
 //            System.out.println("FINAL VAULT PATH = " + fullPath);
             LogicalResponse response = vault.logical().read(fullPath);
 
