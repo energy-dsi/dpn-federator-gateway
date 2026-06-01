@@ -45,6 +45,10 @@ import org.apache.kafka.common.utils.Bytes;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import uk.gov.dbt.ndtp.federator.client.connection.ConnectionProperties;
+import uk.gov.dbt.ndtp.federator.common.checksum.ChecksumMismatchAction;          // NEW
+import uk.gov.dbt.ndtp.federator.common.checksum.ChecksumValidationException;      // NEW
+import uk.gov.dbt.ndtp.federator.common.checksum.ChecksumValidationReporter;       // NEW
+import uk.gov.dbt.ndtp.federator.common.checksum.PayloadChecksumUtil;              // NEW
 import uk.gov.dbt.ndtp.federator.common.utils.KafkaUtil;
 import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
 import uk.gov.dbt.ndtp.federator.common.utils.RedisUtil;
@@ -56,6 +60,10 @@ import uk.gov.dbt.ndtp.secure.agent.sources.Event;
 import uk.gov.dbt.ndtp.secure.agent.sources.Header;
 import uk.gov.dbt.ndtp.secure.agent.sources.kafka.sinks.KafkaSink;
 import uk.gov.dbt.ndtp.secure.agent.sources.memory.SimpleEvent;
+import uk.gov.dbt.ndtp.federator.common.utils.SecurityLabelUtil;
+import uk.gov.dbt.ndtp.federator.common.utils.ObjectMapperUtil;
+import java.util.Map;
+import java.util.Objects;
 
 /**
  * GRPCTopicClient is a client for the FederatorService GRPC service.
@@ -72,6 +80,8 @@ public class GRPCTopicClient extends GRPCAbstractClient {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("GRPClient");
     private static final String CLIENT_IDLE_TIMEOUT = "client.idleTimeout.secs";
+
+    private final ChecksumMismatchAction mismatchAction; // NEW
 
     public GRPCTopicClient(ConnectionProperties connectionProperties, String topicPrefix) {
         this(
@@ -101,6 +111,7 @@ public class GRPCTopicClient extends GRPCAbstractClient {
                 port,
                 isTLSEnabled,
                 topicPrefix);
+        this.mismatchAction = resolveChecksumAction(); // NEW
     }
 
     /**
@@ -114,6 +125,7 @@ public class GRPCTopicClient extends GRPCAbstractClient {
                 client,
                 serverName,
                 topicPrefix);
+        this.mismatchAction = resolveChecksumAction(); // NEW
     }
 
     public static void sendMessage(KafkaSink<Bytes, Bytes> sink, KafkaByteBatch batch) {
@@ -194,6 +206,126 @@ public class GRPCTopicClient extends GRPCAbstractClient {
                 }
 
                 LOGGER.debug("Consuming message: {}, {} : {}", batch.getTopic(), batch.getOffset(), batch.getValue());
+
+                // ── CHECKSUM VERIFICATION (NEW) ───────────────────────────────────────
+                int     inBytes  = batch.getValue().size();
+                String  expected = batch.getPayloadChecksum(); // ← TEMP FAILURE TEST
+                String  actual   = PayloadChecksumUtil.compute(batch.getValue());
+                boolean pass     = PayloadChecksumUtil.verify(
+                        batch.getValue(), expected, batch.getTopic(), batch.getOffset());
+
+                // ── ORG / SCHEMA / PRODUCT NAME — priority order:
+                //   1. metadata header JSON  {"orgName":"neso","schemaType":"eq","productType":"eqsample1",...}
+                //      ← highest priority; always present per spec
+                //   2. Security-Label header ORGANISATION_TYPE=ENV  ← fallback for orgName only
+                //   3. serverName from management node DB           ← final fallback for orgName
+
+                // Priority 1: scan ALL headers — try to parse each value as JSON.
+                //   The header KEY is not required to be a specific name.
+                //   We accept the first header whose value is a JSON object
+                //   containing any of: "orgName", "schemaType", "productType".
+                //   e.g. value = {"orgName":"neso","schemaType":"eq","productType":"eqsample1",...}
+                String orgFromMetadata     = null;
+                String schemaFromMetadata  = null;
+                String productFromMetadata = null;
+
+                for (var h : batch.getSharedList()) {
+                    String key = h.getKey();
+                    String val = h.getValue();
+                    if (val == null || val.isBlank()) continue;
+
+                    // Approach 1 — individual header per field (Kafka UI v0.7.2 sends JSON
+                    //              as individual headers: key='orgName' value='neso' etc.)
+                    if ("orgName".equalsIgnoreCase(key))     { orgFromMetadata     = val.trim(); continue; }
+                    if ("schemaType".equalsIgnoreCase(key))  { schemaFromMetadata  = val.trim(); continue; }
+                    if ("productType".equalsIgnoreCase(key)) { productFromMetadata = val.trim(); continue; }
+
+                    // Approach 2 — single header whose value is a JSON object
+                    //              {"orgName":"neso","schemaType":"eq","productType":"eqsample1",...}
+                    if (!val.trim().startsWith("{")) continue;
+                    try {
+                        @SuppressWarnings("unchecked")
+                        java.util.Map<String, Object> json =
+                                ObjectMapperUtil.getInstance()
+                                        .readValue(val, java.util.Map.class);
+                        // Accept this header if it contains at least one of our fields
+                        if (json.containsKey("orgName") || json.containsKey("schemaType")
+                                || json.containsKey("productType")) {
+                            if (json.get("orgName")     != null) orgFromMetadata     = json.get("orgName").toString().trim();
+                            if (json.get("schemaType")  != null) schemaFromMetadata  = json.get("schemaType").toString().trim();
+                            if (json.get("productType") != null) productFromMetadata = json.get("productType").toString().trim();
+                            LOGGER.debug("Metadata found in header key='{}': org={} schema={} product={}",
+                                    h.getKey(), orgFromMetadata, schemaFromMetadata, productFromMetadata);
+                            break; // stop at first matching header
+                        }
+                    } catch (Exception e) {
+                        // not JSON or wrong structure — skip silently
+                        LOGGER.trace("Header key='{}' value is not metadata JSON", h.getKey());
+                    }
+                }
+
+                // Priority 2: extract ORGANISATION_TYPE from Security-Label (orgName only)
+                String orgFromLabel = (orgFromMetadata != null) ? null :
+                        batch.getSharedList().stream()
+                        .filter(h -> "Security-Label".equalsIgnoreCase(h.getKey()))
+                        .map(h -> {
+                            try {
+                                Map<String, String> parsed =
+                                        SecurityLabelUtil.parse(h.getValue()).asMap();
+                                String org = parsed.get("ORGANISATION_TYPE");
+                                if (org == null) org = parsed.get("ORGANISATION");
+                                return org;
+                            } catch (Exception e) { return null; }
+                        })
+                        .filter(Objects::nonNull)
+                        .findFirst()
+                        .orElse(null);
+
+                // Priority 3: serverName from management node DB (always available)
+                String orgName     = (orgFromMetadata != null) ? orgFromMetadata
+                                   : (orgFromLabel    != null) ? orgFromLabel
+                                   : this.serverName;
+                String schemaName  = schemaFromMetadata;   // null if header absent
+                String productName = productFromMetadata;  // null if header absent
+
+                if (!pass) {
+                    ChecksumValidationException ex = new ChecksumValidationException(
+                            batch.getTopic(), batch.getOffset(), expected, actual);
+
+                    switch (mismatchAction) {
+                        case SKIP -> {
+                            LOGGER.warn(ChecksumValidationReporter.stream(
+                                    batch.getTopic(), batch.getOffset(),
+                                    inBytes, -1, expected, actual, ex,
+                                    orgName, schemaName, productName));
+                            RedisUtil.getInstance().setOffset(
+                                    getRedisPrefix(), req.getTopic(), batch.getOffset() + 1);
+                            continue;
+                        }
+                        case ABORT -> {
+                            LOGGER.error(ChecksumValidationReporter.stream(
+                                    batch.getTopic(), batch.getOffset(),
+                                    inBytes, -1, expected, actual, ex,
+                                    orgName, schemaName, productName));
+                            throw new ClientGRPCJobException(
+                                    "Checksum ABORT on topic=" + batch.getTopic()
+                                    + " offset=" + batch.getOffset(), ex);
+                        }
+                        case LOG_ONLY -> {
+                            LOGGER.error(ChecksumValidationReporter.stream(
+                                    batch.getTopic(), batch.getOffset(),
+                                    inBytes, inBytes, expected, actual, ex,
+                                    orgName, schemaName, productName));
+                        }
+                    }
+                } else {
+                    LOGGER.info(ChecksumValidationReporter.stream(
+                            batch.getTopic(), batch.getOffset(),
+                            inBytes, inBytes, expected, actual, null,
+                            orgName, schemaName, productName));
+                }
+                // ─────────────────────────────────────────────────────────────────────
+
                 sendMessage(sink, batch);
 
                 // The persisted offset here is read when a new job starts.
@@ -260,5 +392,18 @@ public class GRPCTopicClient extends GRPCAbstractClient {
 
     public void testConnectivity() {
         // getStub().testConnectivity(TopicRequest.getDefaultInstance());
+    }
+
+    // NEW — resolves checksum.on.mismatch from client.properties
+    // Defaults to SKIP if the property is missing or unrecognised.
+    private ChecksumMismatchAction resolveChecksumAction() {
+        String raw = PropertyUtil.getPropertyValue("checksum.on.mismatch", "SKIP")
+                .toUpperCase().trim();
+        try {
+            return ChecksumMismatchAction.valueOf(raw);
+        } catch (IllegalArgumentException e) {
+            LOGGER.warn("Unknown checksum.on.mismatch value '{}', defaulting to SKIP", raw);
+            return ChecksumMismatchAction.SKIP;
+        }
     }
 }

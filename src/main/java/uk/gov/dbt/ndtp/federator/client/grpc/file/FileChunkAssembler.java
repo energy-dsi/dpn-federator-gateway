@@ -28,6 +28,8 @@ import uk.gov.dbt.ndtp.federator.client.storage.ReceivedFileStorageFactory;
 import uk.gov.dbt.ndtp.federator.client.storage.StoredFileResult;
 import uk.gov.dbt.ndtp.federator.client.storage.impl.GCPReceivedFileStorage;
 import uk.gov.dbt.ndtp.federator.client.storage.impl.S3ReceivedFileStorage;
+import uk.gov.dbt.ndtp.federator.common.checksum.ChecksumValidationReporter; // NEW
+import uk.gov.dbt.ndtp.federator.common.checksum.DestinationMetadata;        // NEW
 import uk.gov.dbt.ndtp.federator.common.utils.GRPCUtils;
 import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
 import uk.gov.dbt.ndtp.federator.exceptions.FileAssemblyException;
@@ -46,13 +48,14 @@ public class FileChunkAssembler {
     private final Path baseTempDir;
     private final Map<String, AssemblyState> assemblies = new HashMap<>();
     private final String destination;
+    private final String producerName; // Producer / Org name shown in checksum report
 
     /**
      * Creates an assembler that writes to the default temp directory resolved from
      * {@code client.files.temp.dir} with fallback to {@code ${java.io.tmpdir}/federator-files}.
      */
     public FileChunkAssembler() {
-        this(resolveDefaultTempDir(), null);
+        this(resolveDefaultTempDir(), null, null);
     }
 
     /**
@@ -63,7 +66,7 @@ public class FileChunkAssembler {
      * @throws IllegalStateException if the directories cannot be created
      */
     public FileChunkAssembler(Path baseTempDir) {
-        this(baseTempDir, null);
+        this(baseTempDir, null, null);
     }
 
     /**
@@ -71,7 +74,21 @@ public class FileChunkAssembler {
      * destination to the storage provider.
      */
     public FileChunkAssembler(String destination) {
-        this(resolveDefaultTempDir(), destination);
+        this(resolveDefaultTempDir(), destination, null);
+        if (destination == null || destination.isBlank()) {
+            throw new IllegalArgumentException("Destination is required and cannot be null/blank");
+        }
+    }
+
+    /**
+     * Creates an assembler with destination and producer/org name for the checksum report.
+     *
+     * @param destination   destination path/key for the stored file
+     * @param producerName  producer name from management node (e.g. "MN-PRODUCER-1")
+     *                      shown as "Producer (Org)" in the checksum report
+     */
+    public FileChunkAssembler(String destination, String producerName) {
+        this(resolveDefaultTempDir(), destination, producerName);
         if (destination == null || destination.isBlank()) {
             throw new IllegalArgumentException("Destination is required and cannot be null/blank");
         }
@@ -84,8 +101,20 @@ public class FileChunkAssembler {
      * @param destination destination to be forwarded to storage provider (e.g., local file path or S3 key/prefix)
      */
     public FileChunkAssembler(Path baseTempDir, String destination) {
-        this.baseTempDir = baseTempDir;
-        this.destination = destination;
+        this(baseTempDir, destination, null);
+    }
+
+    /**
+     * Primary constructor — all fields.
+     *
+     * @param baseTempDir  base directory used to store final files and temporary parts
+     * @param destination  destination forwarded to storage provider
+     * @param producerName producer name (org) shown in checksum report
+     */
+    public FileChunkAssembler(Path baseTempDir, String destination, String producerName) {
+        this.baseTempDir  = baseTempDir;
+        this.destination  = destination;
+        this.producerName = producerName;
         ensureDir(baseTempDir);
         ensureDir(baseTempDir.resolve(".parts"));
     }
@@ -215,14 +244,45 @@ public class FileChunkAssembler {
         }
     }
 
+    // MODIFIED — same method signature, same logic, now emits structured reporter logs
     private void verifyChecksumIfProvided(
             FileChunk chunk, AssemblyState state, String key, String fileName, long seqId) {
         String expectedChecksum = chunk.getFileChecksum();
-        String actualChecksum = GRPCUtils.calculateSha256Checksum(state.tempFile);
-        log.info("Expected checksum: {}, actual checksum: {}", expectedChecksum, actualChecksum);
-        if (!expectedChecksum.isBlank() && !expectedChecksum.equalsIgnoreCase(actualChecksum)) {
+        String actualChecksum   = GRPCUtils.calculateSha256Checksum(state.tempFile);
+
+        // resolve storage provider for the report (e.g. LOCAL, S3, AZURE, GCP)
+        String provider = resolveStorageProvider();
+
+        boolean mismatch = !expectedChecksum.isBlank()
+                && !expectedChecksum.equalsIgnoreCase(actualChecksum);
+
+        // Parse org, schema, product from the hyphen-separated destination filename
+        // e.g. "jsonschema-testorg-sampleproduct-v1.json"
+        //        → orgName=testorg  schemaName=jsonschema  productName=sampleproduct
+        // Falls back to producerName for orgName when destination does not follow convention
+        DestinationMetadata meta = DestinationMetadata.from(destination);
+        String orgName     = meta.isPresent() ? meta.orgName     : producerName;
+        String schemaName  = meta.isPresent() ? meta.schemaType  : null;
+        String productName = meta.isPresent() ? meta.productName : null;
+
+        if (mismatch) {
+            FileAssemblyException ex = new FileAssemblyException(
+                    "Checksum mismatch for file " + fileName + " (seq=" + seqId + ")");
+            log.error(ChecksumValidationReporter.file(
+                    fileName, seqId,
+                    chunk.getTotalChunks(), chunk.getFileSize(),
+                    provider, fileName,
+                    expectedChecksum, actualChecksum, ex,
+                    orgName, schemaName, productName));
             cleanupOnError(key, state);
-            throw new FileAssemblyException("Checksum mismatch for file " + fileName + " (seq=" + seqId + ")");
+            throw ex;
+        } else {
+            log.info(ChecksumValidationReporter.file(
+                    fileName, seqId,
+                    chunk.getTotalChunks(), chunk.getFileSize(),
+                    provider, fileName,
+                    expectedChecksum, actualChecksum, null,
+                    orgName, schemaName, productName));
         }
     }
 
@@ -296,6 +356,16 @@ public class FileChunkAssembler {
 
     private String buildKey(String fileName, long seqId) {
         return sanitize(fileName) + "#" + seqId;
+    }
+
+    // NEW — reads client.files.storage.provider from client.properties
+    // Returns "LOCAL" if the property is missing (safe fallback for the report field)
+    private String resolveStorageProvider() {
+        try {
+            return PropertyUtil.getPropertyValue("client.files.storage.provider", "LOCAL");
+        } catch (RuntimeException e) {
+            return "LOCAL";
+        }
     }
 
     private static class AssemblyState {
