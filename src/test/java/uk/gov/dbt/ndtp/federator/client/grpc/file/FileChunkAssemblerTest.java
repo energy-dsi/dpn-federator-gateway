@@ -206,9 +206,26 @@ class FileChunkAssemblerTest {
 
     @Test
     void testConstructors() {
+        // 1. No-arg constructor — uses default temp dir
         assertNotNull(new FileChunkAssembler());
-        assertNotNull(new FileChunkAssembler(tempDir.toString()));
+
+        // 2. Path-only constructor — explicit base temp dir
+        assertNotNull(new FileChunkAssembler(tempDir));
+
+        // 3. String destination constructor — destination is the output file path
+        assertNotNull(new FileChunkAssembler(
+                Path.of(tempDir.resolve("jsonschema-testorg-sampleproduct-v1.nt").toString())));
+
+        // 4. String destination + producerName constructor
+        assertNotNull(new FileChunkAssembler(
+                tempDir.resolve("jsonschema-testorg-sampleproduct-v1.nt").toString(),
+                "MNPRODUCER1"));
+
+        // 5. Path baseTempDir + String destination constructor
         assertNotNull(new FileChunkAssembler(tempDir, "dest"));
+
+        // 6. Primary constructor — Path + destination + producerName
+        assertNotNull(new FileChunkAssembler(tempDir, "dest", "MNPRODUCER1"));
     }
 
     @Test
