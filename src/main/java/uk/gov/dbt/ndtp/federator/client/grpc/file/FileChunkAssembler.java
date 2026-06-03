@@ -70,17 +70,6 @@ public class FileChunkAssembler {
     }
 
     /**
-     * Creates an assembler that writes to the default temp directory and forwards the provided
-     * destination to the storage provider.
-     */
-    public FileChunkAssembler(String destination) {
-        this(resolveDefaultTempDir(), destination, null);
-        if (destination == null || destination.isBlank()) {
-            throw new IllegalArgumentException("Destination is required and cannot be null/blank");
-        }
-    }
-
-    /**
      * Creates an assembler with destination and producer/org name for the checksum report.
      *
      * @param destination   destination path/key for the stored file
