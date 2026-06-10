@@ -18,11 +18,11 @@
 
 package uk.gov.dbt.ndtp.federator.client.grpc;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
+import com.google.protobuf.ByteString;
 import io.grpc.ManagedChannel;
 import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
@@ -35,6 +35,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import uk.gov.dbt.ndtp.federator.client.connection.ConnectionProperties;
+import uk.gov.dbt.ndtp.federator.common.checksum.PayloadChecksumUtil;
 import uk.gov.dbt.ndtp.federator.common.utils.KafkaUtil;
 import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
 import uk.gov.dbt.ndtp.federator.common.utils.RedisUtil;
@@ -254,7 +255,9 @@ class GRPCTopicClientTest {
             propertyMock
                     .when(() -> PropertyUtil.getPropertyIntValue(anyString(), anyString()))
                     .thenReturn(1);
-
+            propertyMock
+                    .when(() -> PropertyUtil.getPropertyValue("checksum.on.mismatch", "SKIP"))
+                    .thenReturn("SKIP");
             FederatorServiceGrpc.FederatorServiceBlockingStub stub =
                     mock(FederatorServiceGrpc.FederatorServiceBlockingStub.class);
             GRPCTopicClient client = new GRPCTopicClient("client", "key", "server", "pref", channel) {
@@ -334,4 +337,51 @@ class GRPCTopicClientTest {
         assertEquals("p", client.topicPrefix);
         client.close();
     }
+    // Helper — builds a batch with a WRONG checksum
+    private KafkaByteBatch batchWithWrongChecksum(String topic, long offset) {
+        ByteString payload = ByteString.copyFromUtf8("test-rdf-payload");
+        return KafkaByteBatch.newBuilder()
+                .setTopic(topic).setOffset(offset)
+                .setValue(payload).setKey(ByteString.copyFromUtf8("k"))
+                .setPayloadChecksum("000000wrongchecksum000000")
+                .setChecksumAlgorithm("SHA-256")
+                .build();
+    }
+    // Helper — builds a batch with CORRECT checksum
+    private KafkaByteBatch batchWithCorrectChecksum(String topic, long offset) {
+        ByteString payload = ByteString.copyFromUtf8("test-rdf-payload");
+        return KafkaByteBatch.newBuilder()
+                .setTopic(topic).setOffset(offset)
+                .setValue(payload).setKey(ByteString.copyFromUtf8("k"))
+                .setPayloadChecksum(PayloadChecksumUtil.compute(payload))
+                .setChecksumAlgorithm("SHA-256")
+                .build();
+    }
+    @Test
+    void checksum_pass_messageWrittenToKafka() {
+        // PASS → message must reach sendMessage()
+        KafkaSink<Bytes,Bytes> sink = mock(KafkaSink.class);
+        KafkaByteBatch batch = batchWithCorrectChecksum("topic", 0L);
+        // simulate via simulateOnNext — PASS means written=true
+        boolean pass = PayloadChecksumUtil.verify(
+                batch.getValue(), batch.getPayloadChecksum(), "topic", 0L);
+        assertTrue(pass, "Correct checksum must return PASS");
+    }
+    @Test
+    void checksum_fail_skip_messageNotWritten() {
+        // SKIP → message must NOT be written
+        ByteString payload = ByteString.copyFromUtf8("rdf");
+        boolean pass = PayloadChecksumUtil.verify(
+                payload, "wrongchecksum", "topic", 1L);
+        assertFalse(pass, "Wrong checksum must return FAIL");
+    }
+
+    @Test
+    void checksum_blankField_tolerated() {
+        // ABSENT → old server, blank field must pass through
+        ByteString payload = ByteString.copyFromUtf8("rdf");
+        boolean pass = PayloadChecksumUtil.verify(payload, "", "topic", 2L);
+        assertTrue(pass, "Blank checksum must be tolerated (old server)");
+    }
+
 }

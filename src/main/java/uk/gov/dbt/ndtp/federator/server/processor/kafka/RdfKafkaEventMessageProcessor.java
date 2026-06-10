@@ -38,7 +38,7 @@ import uk.gov.dbt.ndtp.grpc.KafkaByteBatch;
 import uk.gov.dbt.ndtp.secure.agent.payloads.RdfPayload;
 import uk.gov.dbt.ndtp.secure.agent.sources.kafka.KafkaEvent;
 import uk.gov.dbt.ndtp.secure.agent.sources.kafka.serializers.RdfPayloadSerializer;
-
+import uk.gov.dbt.ndtp.federator.common.checksum.PayloadChecksumUtil;
 /**
  * Processes a Kafka event message and sends it to the server call stream observer
  * @see StreamObservable
@@ -69,6 +69,7 @@ public class RdfKafkaEventMessageProcessor implements MessageProcessor<KafkaEven
             String topic = kafkaEvent.getConsumerRecord().topic();
             long offset = kafkaEvent.getConsumerRecord().offset();
             ByteString byteStringValue = ByteString.copyFrom(serializer.serialize(topic, kafkaEvent.value()));
+            String payloadChecksum = PayloadChecksumUtil.compute(byteStringValue);
             ByteString byteStringKey = ByteString.copyFrom(
                     (null != kafkaEvent.key())
                             ? kafkaEvent.key().getBytes()
@@ -79,6 +80,8 @@ public class RdfKafkaEventMessageProcessor implements MessageProcessor<KafkaEven
                     .setValue(byteStringValue)
                     .setKey(byteStringKey)
                     .addAllShared(selectHeaders(kafkaEvent.headers()))
+                    .setPayloadChecksum(payloadChecksum)           // ADD THIS
+                    .setChecksumAlgorithm(PayloadChecksumUtil.ALGORITHM) // ADD THIS
                     .build();
 
             serverCallStreamObserver.onNext(response);
@@ -87,4 +90,5 @@ public class RdfKafkaEventMessageProcessor implements MessageProcessor<KafkaEven
             serverCallStreamObserver.onError(e);
         }
     }
+
 }

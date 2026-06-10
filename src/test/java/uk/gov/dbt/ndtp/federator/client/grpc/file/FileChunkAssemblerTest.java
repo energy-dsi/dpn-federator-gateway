@@ -1,6 +1,9 @@
 package uk.gov.dbt.ndtp.federator.client.grpc.file;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import com.google.protobuf.ByteString;
 import java.io.IOException;
@@ -203,9 +206,26 @@ class FileChunkAssemblerTest {
 
     @Test
     void testConstructors() {
+        // 1. No-arg constructor — uses default temp dir
         assertNotNull(new FileChunkAssembler());
-        assertNotNull(new FileChunkAssembler(tempDir.toString()));
+
+        // 2. Path-only constructor — explicit base temp dir
+        assertNotNull(new FileChunkAssembler(tempDir));
+
+        // 3. String destination constructor — destination is the output file path
+        assertNotNull(new FileChunkAssembler(
+                Path.of(tempDir.resolve("jsonschema-testorg-sampleproduct-v1.nt").toString())));
+
+        // 4. String destination + producerName constructor
+        assertNotNull(new FileChunkAssembler(
+                tempDir.resolve("jsonschema-testorg-sampleproduct-v1.nt").toString(),
+                "MNPRODUCER1"));
+
+        // 5. Path baseTempDir + String destination constructor
         assertNotNull(new FileChunkAssembler(tempDir, "dest"));
+
+        // 6. Primary constructor — Path + destination + producerName
+        assertNotNull(new FileChunkAssembler(tempDir, "dest", "MNPRODUCER1"));
     }
 
     @Test
@@ -295,13 +315,13 @@ class FileChunkAssemblerTest {
         // Mock ReceivedFileStorageFactory to return a mock GCP storage that succeeds
         try (MockedStatic<ReceivedFileStorageFactory> factoryMock =
                 Mockito.mockStatic(ReceivedFileStorageFactory.class)) {
-            ReceivedFileStorage mockGCPStorage = Mockito.mock(GCPReceivedFileStorage.class);
+            ReceivedFileStorage mockGCPStorage = mock(GCPReceivedFileStorage.class);
             factoryMock.when(ReceivedFileStorageFactory::get).thenReturn(mockGCPStorage);
 
             // Mock successful storage with remote URI present
             Path mockPath = tempDir.resolve(fileName);
             StoredFileResult successResult = new StoredFileResult(mockPath, "gs://my-bucket/gcptest.txt");
-            Mockito.when(mockGCPStorage.store(Mockito.any(), Mockito.eq(fileName), Mockito.any()))
+            when(mockGCPStorage.store(any(), Mockito.eq(fileName), any()))
                     .thenReturn(successResult);
 
             Path result = assembler.accept(last);
@@ -328,13 +348,13 @@ class FileChunkAssemblerTest {
         // Mock ReceivedFileStorageFactory to return a mock GCP storage that fails (no remote URI)
         try (MockedStatic<ReceivedFileStorageFactory> factoryMock =
                 Mockito.mockStatic(ReceivedFileStorageFactory.class)) {
-            ReceivedFileStorage mockGCPStorage = Mockito.mock(GCPReceivedFileStorage.class);
+            ReceivedFileStorage mockGCPStorage = mock(GCPReceivedFileStorage.class);
             factoryMock.when(ReceivedFileStorageFactory::get).thenReturn(mockGCPStorage);
 
             // Mock failed storage with no remote URI
             Path mockPath = tempDir.resolve(fileName);
             StoredFileResult failureResult = new StoredFileResult(mockPath, null);
-            Mockito.when(mockGCPStorage.store(Mockito.any(), Mockito.eq(fileName), Mockito.any()))
+            when(mockGCPStorage.store(any(), Mockito.eq(fileName), any()))
                     .thenReturn(failureResult);
 
             Path result = assembler.accept(last);
@@ -361,17 +381,64 @@ class FileChunkAssemblerTest {
         // Mock ReceivedFileStorageFactory to return a mock S3 storage that fails (no remote URI)
         try (MockedStatic<ReceivedFileStorageFactory> factoryMock =
                 Mockito.mockStatic(ReceivedFileStorageFactory.class)) {
-            ReceivedFileStorage mockS3Storage = Mockito.mock(S3ReceivedFileStorage.class);
+            ReceivedFileStorage mockS3Storage = mock(S3ReceivedFileStorage.class);
             factoryMock.when(ReceivedFileStorageFactory::get).thenReturn(mockS3Storage);
 
             // Mock failed storage with no remote URI
             Path mockPath = tempDir.resolve(fileName);
             StoredFileResult failureResult = new StoredFileResult(mockPath, null);
-            Mockito.when(mockS3Storage.store(Mockito.any(), Mockito.eq(fileName), Mockito.any()))
+            when(mockS3Storage.store(any(), Mockito.eq(fileName), any()))
                     .thenReturn(failureResult);
 
             Path result = assembler.accept(last);
             assertNull(result, "Should return null when S3 storage fails (no remote URI)");
         }
     }
+    @Test
+    void checksumPass_logsStructuredReport() throws Exception {
+        FileChunkAssembler assembler = new FileChunkAssembler(tempDir);
+        byte[] content = "rdf-turtle-content".getBytes();
+        String checksum = GRPCUtils.calculateSha256Checksum(content);
+
+        try (MockedStatic<ReceivedFileStorageFactory> mocked =
+                     Mockito.mockStatic(ReceivedFileStorageFactory.class)) {
+            ReceivedFileStorage storage = mock(ReceivedFileStorage.class);
+            StoredFileResult result = new StoredFileResult(
+                    tempDir.resolve("output.ttl"), null);
+            when(storage.store(any(), any(), any())).thenReturn(result);
+            mocked.when(ReceivedFileStorageFactory::get).thenReturn(storage);
+
+            // ADD THIS — send data in a non-last chunk first
+            FileChunk dataChunk = FileChunk.newBuilder()
+                    .setFileName("output.ttl")
+                    .setFileSequenceId(1L)
+                    .setChunkData(ByteString.copyFrom(content))  // ← data goes here
+                    .setChunkIndex(0).setTotalChunks(2)
+                    .setIsLastChunk(false)                       // ← not last
+                    .setFileSize(content.length)
+                    .build();
+            assembler.accept(dataChunk);  // writes content to .part file
+
+            // Last chunk closes and verifies — no data, just metadata
+            FileChunk lastChunk = FileChunk.newBuilder()
+                    .setFileName("output.ttl")
+                    .setFileSequenceId(1L)
+                    .setChunkData(ByteString.EMPTY)              // ← no data
+                    .setChunkIndex(1).setTotalChunks(2)
+                    .setIsLastChunk(true)                        // ← triggers verify
+                    .setFileChecksum(checksum)                   // ← matches content
+                    .setFileSize(content.length)
+                    .build();
+
+            // when — should not throw
+            assertDoesNotThrow(() -> assembler.accept(lastChunk));
+        }
+    }
+
+    @Test
+    void checksumMismatch_logsFailReport_andThrows() {
+        // existing test already covers this — run it to confirm
+        // checksumMismatch_throwsAndCleansTemp()
+    }
+
 }

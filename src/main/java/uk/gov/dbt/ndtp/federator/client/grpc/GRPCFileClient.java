@@ -14,6 +14,7 @@ import uk.gov.dbt.ndtp.grpc.FileChunk;
 import uk.gov.dbt.ndtp.grpc.FileStreamEvent;
 import uk.gov.dbt.ndtp.grpc.FileStreamRequest;
 import uk.gov.dbt.ndtp.grpc.StreamWarning;
+import uk.gov.dbt.ndtp.federator.common.checksum.ChecksumValidationReporter;
 
 /**
  * GRPC client responsible for streaming files from the Federator service and assembling them locally.
@@ -87,7 +88,7 @@ public class GRPCFileClient extends GRPCAbstractClient {
         validatePrerequisites(topic, destination);
 
         FileStreamRequest request = buildFileStreamRequest(topic, offset);
-        FileChunkAssembler assembler = new FileChunkAssembler(destination);
+        FileChunkAssembler assembler = new FileChunkAssembler(destination, this.serverName);
 
         try {
             processFileStream(topic, offset, request, assembler);
@@ -204,16 +205,20 @@ public class GRPCFileClient extends GRPCAbstractClient {
      */
     private long handleWarningEvent(String topic, StreamWarning warning, long currentSeq) {
         // Log as warning and increment Redis counter so upstream retry logic can stop looping forever
-        log.warn(
-                "Received stream warning for topic '{}': reason='{}', details='{}', skippedSequenceId={}",
-                topic,
-                warning.getReason(),
-                warning.getDetails(),
-                warning.getSkippedSequenceId());
+//        log.warn(
+//                "Received stream warning for topic '{}': reason='{}', details='{}', skippedSequenceId={}",
+//                topic,
+//                warning.getReason(),
+//                warning.getDetails(),
+//                warning.getSkippedSequenceId());
 
         saveNextOffsetToRedis(topic, warning.getSkippedSequenceId());
+        log.warn(ChecksumValidationReporter.fileSkipped(
+                warning.getSkippedSequenceId(),
+                warning.getReason(),
+                warning.getDetails()));
 
-        log.warn("Incremented stream warning counter for topic '{}' to {}", topic, warning.getSkippedSequenceId() + 1);
+//        log.warn("Incremented stream warning counter for topic '{}' to {}", topic, warning.getSkippedSequenceId() + 1);
 
         // NOTE: we deliberately do NOT advance the offset here, because warning implies server skipped
         // a sequence id for a reason (e.g., deserialization/validation). Offset advancement behaviour

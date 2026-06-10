@@ -22,6 +22,7 @@ import org.mockito.MockedStatic;
 import uk.gov.dbt.ndtp.federator.client.jobs.params.JobParams;
 import uk.gov.dbt.ndtp.federator.client.jobs.params.RecurrentJobRequest;
 import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
+import java.net.ServerSocket;
 
 class DefaultJobSchedulerProviderTest {
 
@@ -221,6 +222,16 @@ class DefaultJobSchedulerProviderTest {
         assertSame(DefaultJobSchedulerProvider.getInstance(), DefaultJobSchedulerProvider.getInstance());
     }
 
+    /** Finds a free port on the local machine. */
+    private static int freePort() {
+        try (ServerSocket s = new ServerSocket(0)) {
+            s.setReuseAddress(true);
+            return s.getLocalPort();
+        } catch (IOException e) {
+            throw new RuntimeException("Cannot find a free port", e);
+        }
+    }
+
     @Test
     void ensureStarted_withUnsupportedStorage_fallsBackToMemory() {
         try (MockedStatic<PropertyUtil> propMock = mockStatic(PropertyUtil.class)) {
@@ -229,7 +240,7 @@ class DefaultJobSchedulerProviderTest {
             propMock.when(() -> PropertyUtil.getPropertyValue(eq("jobs.storage.provider"), anyString()))
                     .thenReturn("unsupported");
             propMock.when(() -> PropertyUtil.getPropertyIntValue(anyString(), anyString()))
-                    .thenReturn(8080);
+                    .thenReturn(freePort()); // use OS-assigned free port — avoids BindException
 
             DefaultJobSchedulerProvider provider = new DefaultJobSchedulerProvider();
             provider.ensureStarted();
@@ -246,7 +257,7 @@ class DefaultJobSchedulerProviderTest {
             propMock.when(() -> PropertyUtil.getPropertyValue(anyString(), anyString()))
                     .thenReturn("memory");
             propMock.when(() -> PropertyUtil.getPropertyIntValue(anyString(), anyString()))
-                    .thenReturn(8081);
+                    .thenReturn(freePort()); // use OS-assigned free port — avoids BindException
 
             DefaultJobSchedulerProvider provider = new DefaultJobSchedulerProvider();
             provider.ensureStarted();

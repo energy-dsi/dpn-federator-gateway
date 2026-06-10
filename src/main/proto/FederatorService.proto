@@ -38,6 +38,12 @@ message KafkaByteBatch {
   string Topic = 4;
   //field 5 *was* SecurityLabel string SecurityLabel = 5, now removed
   repeated Headers Shared = 6;
+  // NEW — SHA-256 hex digest of the Value bytes
+  // Empty string = old server that doesn't compute checksums (tolerated)
+  string payload_checksum   = 7;
+
+  // NEW — algorithm identifier, currently always "SHA-256"
+  string checksum_algorithm = 8;
 }
 
 message TopicRequest {

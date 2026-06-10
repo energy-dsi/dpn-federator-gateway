@@ -26,13 +26,16 @@
 
 package uk.gov.dbt.ndtp.federator.server.processor;
 
+import static org.junit.Assert.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 
 import java.util.Set;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.junit.jupiter.api.Test;
+import uk.gov.dbt.ndtp.federator.common.checksum.PayloadChecksumUtil;
 import uk.gov.dbt.ndtp.federator.server.grpc.LimitedServerCallStreamObserver;
 import uk.gov.dbt.ndtp.federator.server.interfaces.StreamObservable;
 import uk.gov.dbt.ndtp.federator.server.processor.kafka.RdfKafkaEventMessageProcessor;
@@ -75,5 +78,36 @@ class RdfKafkaEventMessageProcessorTest {
         cut.process(message);
         // then
         verify(mockObserver).onNext(any(KafkaByteBatch.class));
+    }
+
+    @Test
+    void test_process_setsPayloadChecksum() {
+        // given
+        KafkaEvent<String, RdfPayload> message = new KafkaEvent<>(
+                new ConsumerRecord<>("topic", 1, 1, "key", null), null);
+        // when
+        cut.process(message);
+        // then — verify batch sent to observer has checksum field set
+        verify(mockObserver).onNext(argThat(batch -> {
+            String checksum = ((KafkaByteBatch) batch).getPayloadChecksum();
+            return checksum != null && checksum.length() == 64; // SHA-256 = 64 hex chars
+        }));
+    }
+
+    @Test
+    void test_process_checksumMatchesPayload() {
+        // given
+        KafkaEvent<String, RdfPayload> message = new KafkaEvent<>(
+                new ConsumerRecord<>("topic", 1, 1, "key", null), null);
+        // capture the batch sent to observer
+        var batchCaptor = org.mockito.ArgumentCaptor
+                .forClass(KafkaByteBatch.class);
+        // when
+        cut.process(message);
+        // then
+        verify(mockObserver).onNext(batchCaptor.capture());
+        KafkaByteBatch batch = batchCaptor.getValue();
+        String expected = PayloadChecksumUtil.compute(batch.getValue());
+        assertEquals(expected, batch.getPayloadChecksum());
     }
 }
