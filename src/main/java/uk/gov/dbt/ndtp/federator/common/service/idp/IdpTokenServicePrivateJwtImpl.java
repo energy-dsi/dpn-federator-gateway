@@ -103,19 +103,18 @@ public class IdpTokenServicePrivateJwtImpl extends AbstractIdpTokenService {
      */
     private final String keyId;
 
-    public IdpTokenServicePrivateJwtImpl(HttpClient httpClient, ObjectMapper objectMapper) {
+    public IdpTokenServicePrivateJwtImpl(HttpClient httpClient, ObjectMapper objectMapper, Properties properties) {
         super(
-                PropertyUtil.getPropertiesFromFilePath(COMMON_CONFIG_PROPERTIES).getProperty("idp.jwks.url"),
+                properties.getProperty("idp.jwks.url"),
                 httpClient,
                 objectMapper);
 
-        Properties props = PropertyUtil.getPropertiesFromFilePath(COMMON_CONFIG_PROPERTIES);
-        this.idpTokenUrl  = props.getProperty("idp.token.url");
-        this.idpClientId  = props.getProperty("idp.client.id");
-        this.jwsAlgorithm = resolveAlgorithm(props.getProperty("idp.jwt.algorithm", "RS256"));
+        this.idpTokenUrl  = properties.getProperty("idp.token.url");
+        this.idpClientId  = properties.getProperty("idp.client.id");
+        this.jwsAlgorithm = resolveAlgorithm(properties.getProperty("idp.jwt.algorithm", "RS256"));
 
         // Load private key AND derive kid from the keystore in a single open — most efficient
-        KeystoreContents ks = loadKeystoreContents(props);
+        KeystoreContents ks = loadKeystoreContents(properties);
         this.privateKey = ks.privateKey();
         this.keyId      = ks.kid();
 
@@ -268,7 +267,6 @@ public class IdpTokenServicePrivateJwtImpl extends AbstractIdpTokenService {
         String keystorePassword = props.getProperty("idp.keystore.password");
         String alias            = props.getProperty("idp.jwt.key.alias");
 
-        System.out.println("keystorePath = " + keystorePath + ", keystorePassword = " + keystorePassword +  ", alias = " + alias);
         if (StringUtils.isAnyBlank(keystorePath, keystorePassword, alias)) {
             throw new FederatorTokenException(
                     "private_key_jwt requires: idp.keystore.path, idp.keystore.password, idp.jwt.key.alias");

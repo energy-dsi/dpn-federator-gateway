@@ -72,7 +72,7 @@ public class GRPCUtils {
             case "private_key_jwt" -> {
                 // No client cert required on the HttpClient; only server-TLS (truststore) needed.
                 HttpClient client = HttpClientFactoryUtils.createHttpClient(properties);
-                yield new IdpTokenServicePrivateJwtImpl(client, mapper);
+                yield new IdpTokenServicePrivateJwtImpl(client, mapper, properties);
             }
             case "mtls" -> {
                 LOGGER.warn("===========Idp mTLS enabled (legacy mode)============");
