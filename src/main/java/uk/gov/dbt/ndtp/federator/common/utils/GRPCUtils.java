@@ -22,11 +22,25 @@ import org.slf4j.LoggerFactory;
 import uk.gov.dbt.ndtp.federator.common.service.idp.IdpTokenService;
 import uk.gov.dbt.ndtp.federator.common.service.idp.IdpTokenServiceClientSecretImpl;
 import uk.gov.dbt.ndtp.federator.common.service.idp.IdpTokenServiceMtlsImpl;
+import uk.gov.dbt.ndtp.federator.common.service.idp.IdpTokenServicePrivateJwtImpl;
 import uk.gov.dbt.ndtp.federator.common.service.secret.SecretProvider;
 
 public class GRPCUtils {
     public static final String COMMON_CONFIG_PROPERTIES = "common.configuration";
     public static final String SHA_256 = "SHA-256";
+
+    /**
+     * Controls which client-authentication strategy is used when talking to Keycloak.
+     * Accepted values (case-insensitive):
+     * <ul>
+     *   <li>{@code private_key_jwt} — RFC 7523 signed JWT assertion (recommended)</li>
+     *   <li>{@code mtls}            — mutual-TLS certificate + client secret (legacy)</li>
+     *   <li>{@code client_secret}   — plain client_secret, no mTLS (default fallback)</li>
+     * </ul>
+     */
+    private static final String IDP_AUTH_MODE_PROPERTY = "idp.auth.mode";
+
+    /** Kept for backward compatibility; ignored when {@code idp.auth.mode} is set. */
     private static final String IDP_MTLS_ENABLED_PROPERTY = "idp.mtls.enabled";
     private static final Logger LOGGER = LoggerFactory.getLogger("GRPCUtils");
 
@@ -38,20 +52,42 @@ public class GRPCUtils {
 
         Properties properties = PropertyUtil.getPropertiesFromFilePath(COMMON_CONFIG_PROPERTIES);
 
+        ObjectMapper mapper = ObjectMapperUtil.getInstance();
+
         SecretProvider secretProvider = PropertyUtil.createSecretProvider(properties);
         PropertyUtil.overrideWithSecrets(properties, secretProvider);
 
-        boolean isMtlsEnabled = Boolean.parseBoolean(properties.getProperty(IDP_MTLS_ENABLED_PROPERTY, "false"));
-        LOGGER.warn("===========Idp mTLS enabled: {}============", isMtlsEnabled);
+        // Prefer the explicit idp.auth.mode property; fall back to the legacy
+        // idp.mtls.enabled boolean for backward compatibility.
+        String authMode = properties.getProperty(IDP_AUTH_MODE_PROPERTY, "").trim().toLowerCase();
+        if (authMode.isEmpty()) {
+            boolean mtlsLegacy = Boolean.parseBoolean(
+                    properties.getProperty(IDP_MTLS_ENABLED_PROPERTY, "false"));
+            authMode = mtlsLegacy ? "mtls" : "client_secret";
+        }
 
-        HttpClient client = isMtlsEnabled
-                ? HttpClientFactoryUtils.createHttpClientWithMtls(properties)
-                : HttpClientFactoryUtils.createHttpClient(properties);
+        LOGGER.info("IDP authentication mode: '{}'", authMode);
 
-        ObjectMapper mapper = ObjectMapperUtil.getInstance();
-        return isMtlsEnabled
-                ? new IdpTokenServiceMtlsImpl(client, mapper)
-                : new IdpTokenServiceClientSecretImpl(client, mapper);
+        return switch (authMode) {
+            case "private_key_jwt" -> {
+                // No client cert required on the HttpClient; only server-TLS (truststore) needed.
+                HttpClient client = HttpClientFactoryUtils.createHttpClient(properties);
+                yield new IdpTokenServicePrivateJwtImpl(client, mapper, properties);
+            }
+            case "mtls" -> {
+                LOGGER.warn("===========Idp mTLS enabled (legacy mode)============");
+                HttpClient client = HttpClientFactoryUtils.createHttpClientWithMtls(properties);
+                yield new IdpTokenServiceMtlsImpl(client, mapper);
+            }
+            default -> {
+                // "client_secret" or any unrecognised value
+                if (!"client_secret".equals(authMode)) {
+                    LOGGER.warn("Unknown idp.auth.mode '{}', defaulting to client_secret", authMode);
+                }
+                HttpClient client = HttpClientFactoryUtils.createHttpClient(properties);
+                yield new IdpTokenServiceClientSecretImpl(client, mapper);
+            }
+        };
     }
 
     /**
