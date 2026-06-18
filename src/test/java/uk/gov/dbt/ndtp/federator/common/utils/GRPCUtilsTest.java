@@ -20,9 +20,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.MockedStatic;
-import uk.gov.dbt.ndtp.federator.common.service.idp.IdpTokenService;
-import uk.gov.dbt.ndtp.federator.common.service.idp.IdpTokenServiceClientSecretImpl;
-import uk.gov.dbt.ndtp.federator.common.service.idp.IdpTokenServiceMtlsImpl;
+import uk.gov.dbt.ndtp.federator.common.service.idp.*;
 
 class GRPCUtilsTest {
 
@@ -79,19 +77,27 @@ class GRPCUtilsTest {
         assertEquals("00010fff", GRPCUtils.bytesToHex(bytes));
     }
 
-    @Test
-    void testCreateIdpTokenService_ClientSecret() throws Exception {
-        File commonConfig = tempDir.resolve("common.properties").toFile();
-        Properties props = new Properties();
-        props.setProperty("idp.mtls.enabled", "false");
+    /**
+     * Writes a common.configuration properties file in tempDir, points
+     * PropertyUtil.COMMON_CONFIG_PROPERTIES at it, and returns the file.
+     */
+    private File writeCommonConfig(String fileName, Properties props) throws Exception {
+        File commonConfig = tempDir.resolve(fileName).toFile();
         try (FileOutputStream out = new FileOutputStream(commonConfig)) {
             props.store(out, null);
         }
-
         PropertyUtil.init("test.properties"); // Just to have it initialized
         PropertyUtil.getInstance()
                 .properties
                 .setProperty(GRPCUtils.COMMON_CONFIG_PROPERTIES, commonConfig.getAbsolutePath());
+        return commonConfig;
+    }
+
+    @Test
+    void testCreateIdpTokenService_ClientSecret() throws Exception {
+        Properties props = new Properties();
+        props.setProperty("idp.mtls.enabled", "false");
+        writeCommonConfig("common.properties", props);
 
         try (MockedStatic<HttpClientFactoryUtils> factoryMock = mockStatic(HttpClientFactoryUtils.class)) {
             factoryMock
@@ -105,17 +111,9 @@ class GRPCUtilsTest {
 
     @Test
     void testCreateIdpTokenService_Mtls() throws Exception {
-        File commonConfig = tempDir.resolve("common_mtls.properties").toFile();
         Properties props = new Properties();
         props.setProperty("idp.mtls.enabled", "true");
-        try (FileOutputStream out = new FileOutputStream(commonConfig)) {
-            props.store(out, null);
-        }
-
-        PropertyUtil.init("test.properties");
-        PropertyUtil.getInstance()
-                .properties
-                .setProperty(GRPCUtils.COMMON_CONFIG_PROPERTIES, commonConfig.getAbsolutePath());
+        writeCommonConfig("common_mtls.properties", props);
 
         // Mocking HttpClientFactoryUtils because it tries to create a real client with MTLS
         try (MockedStatic<HttpClientFactoryUtils> factoryMock = mockStatic(HttpClientFactoryUtils.class)) {
@@ -125,6 +123,94 @@ class GRPCUtilsTest {
 
             IdpTokenService service = GRPCUtils.createIdpTokenService();
             assertTrue(service instanceof IdpTokenServiceMtlsImpl);
+        }
+    }
+
+    @Test
+    void testCreateIdpTokenService_PrivateKeyJwt_ExplicitMode() throws Exception {
+        Properties props = new Properties();
+        props.setProperty("idp.auth.mode", "private_key_jwt");
+        props.setProperty("idp.token.url", "https://keycloak.example.com/realms/test/protocol/openid-connect/token");
+        props.setProperty("idp.jwks.url", "https://keycloak.example.com/realms/test/protocol/openid-connect/certs");
+        props.setProperty("idp.client.id", "test-client");
+        props.setProperty("idp.jwt.algorithm", "RS256");
+
+        // Build a real PKCS12 keystore fixture so the service constructor
+        // (which opens and parses the keystore) succeeds.
+        KeystoreTestFixture fixture = KeystoreTestFixture.create(tempDir, "federator");
+        props.setProperty("idp.keystore.path", fixture.keystorePath().toString());
+        props.setProperty("idp.keystore.password", fixture.password());
+        props.setProperty("idp.jwt.key.alias", fixture.alias());
+
+        writeCommonConfig("common_privatejwt.properties", props);
+
+        try (MockedStatic<HttpClientFactoryUtils> factoryMock = mockStatic(HttpClientFactoryUtils.class)) {
+            factoryMock
+                    .when(() -> HttpClientFactoryUtils.createHttpClient(any()))
+                    .thenReturn(mock(java.net.http.HttpClient.class));
+
+            IdpTokenService service = GRPCUtils.createIdpTokenService();
+            assertTrue(service instanceof IdpTokenServicePrivateJwtImpl);
+
+            // private_key_jwt only needs server-side TLS; createHttpClientWithMtls must not be invoked
+            factoryMock.verify(() -> HttpClientFactoryUtils.createHttpClientWithMtls(any()), never());
+        }
+    }
+
+    @Test
+    void testCreateIdpTokenService_PrivateKeyJwt_CaseInsensitive() throws Exception {
+        Properties props = new Properties();
+        props.setProperty("idp.auth.mode", "Private_Key_JWT");
+        props.setProperty("idp.token.url", "https://keycloak.example.com/realms/test/protocol/openid-connect/token");
+        props.setProperty("idp.jwks.url", "https://keycloak.example.com/realms/test/protocol/openid-connect/certs");
+        props.setProperty("idp.client.id", "test-client");
+
+        KeystoreTestFixture fixture = KeystoreTestFixture.create(tempDir, "federator");
+        props.setProperty("idp.keystore.path", fixture.keystorePath().toString());
+        props.setProperty("idp.keystore.password", fixture.password());
+        props.setProperty("idp.jwt.key.alias", fixture.alias());
+
+        writeCommonConfig("common_privatejwt_case.properties", props);
+
+        try (MockedStatic<HttpClientFactoryUtils> factoryMock = mockStatic(HttpClientFactoryUtils.class)) {
+            factoryMock
+                    .when(() -> HttpClientFactoryUtils.createHttpClient(any()))
+                    .thenReturn(mock(java.net.http.HttpClient.class));
+
+            IdpTokenService service = GRPCUtils.createIdpTokenService();
+            assertTrue(service instanceof IdpTokenServicePrivateJwtImpl);
+        }
+    }
+
+    @Test
+    void testCreateIdpTokenService_UnknownAuthMode_DefaultsToClientSecret() throws Exception {
+        Properties props = new Properties();
+        props.setProperty("idp.auth.mode", "totally_unknown_mode");
+        writeCommonConfig("common_unknown.properties", props);
+
+        try (MockedStatic<HttpClientFactoryUtils> factoryMock = mockStatic(HttpClientFactoryUtils.class)) {
+            factoryMock
+                    .when(() -> HttpClientFactoryUtils.createHttpClient(any()))
+                    .thenReturn(mock(java.net.http.HttpClient.class));
+
+            IdpTokenService service = GRPCUtils.createIdpTokenService();
+            assertTrue(service instanceof IdpTokenServiceClientSecretImpl);
+        }
+    }
+
+    @Test
+    void testCreateIdpTokenService_NoModeOrLegacyFlag_DefaultsToClientSecret() throws Exception {
+        // Neither idp.auth.mode nor idp.mtls.enabled set at all.
+        Properties props = new Properties();
+        writeCommonConfig("common_empty.properties", props);
+
+        try (MockedStatic<HttpClientFactoryUtils> factoryMock = mockStatic(HttpClientFactoryUtils.class)) {
+            factoryMock
+                    .when(() -> HttpClientFactoryUtils.createHttpClient(any()))
+                    .thenReturn(mock(java.net.http.HttpClient.class));
+
+            IdpTokenService service = GRPCUtils.createIdpTokenService();
+            assertTrue(service instanceof IdpTokenServiceClientSecretImpl);
         }
     }
 
