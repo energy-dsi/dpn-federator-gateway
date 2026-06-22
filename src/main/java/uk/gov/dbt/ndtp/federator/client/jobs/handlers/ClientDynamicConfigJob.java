@@ -3,19 +3,13 @@
 // and maintained by the National Digital Twin Programme.
 package uk.gov.dbt.ndtp.federator.client.jobs.handlers;
 
-import java.time.Duration;
-import java.util.ArrayList;
-import java.util.List;
+import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import uk.gov.dbt.ndtp.federator.client.connection.ConnectionProperties;
 import uk.gov.dbt.ndtp.federator.client.jobs.Job;
 import uk.gov.dbt.ndtp.federator.client.jobs.JobSchedulerProvider;
 import uk.gov.dbt.ndtp.federator.client.jobs.JobsConstants;
-import uk.gov.dbt.ndtp.federator.client.jobs.params.ClientFileExchangeGRPCJobParams;
-import uk.gov.dbt.ndtp.federator.client.jobs.params.ClientGRPCJobParams;
-import uk.gov.dbt.ndtp.federator.client.jobs.params.FileExchangeProperties;
-import uk.gov.dbt.ndtp.federator.client.jobs.params.JobParams;
-import uk.gov.dbt.ndtp.federator.client.jobs.params.RecurrentJobRequest;
+import uk.gov.dbt.ndtp.federator.client.jobs.params.*;
 import uk.gov.dbt.ndtp.federator.client.jobs.schedule.ScheduleAttributesResolver;
 import uk.gov.dbt.ndtp.federator.common.management.ManagementNodeDataException;
 import uk.gov.dbt.ndtp.federator.common.model.dto.ConsumerConfigDTO;
@@ -23,7 +17,12 @@ import uk.gov.dbt.ndtp.federator.common.model.dto.ProducerDTO;
 import uk.gov.dbt.ndtp.federator.common.model.dto.ProductConsumerDTO;
 import uk.gov.dbt.ndtp.federator.common.model.dto.ProductDTO;
 import uk.gov.dbt.ndtp.federator.common.service.config.ConsumerConfigService;
+import uk.gov.dbt.ndtp.federator.common.service.ocsp.OcspCertificateVerificationService;
 import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
+
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Job handler for dynamic configuration updates from Management Node. Fetches producer
@@ -59,6 +58,8 @@ public class ClientDynamicConfigJob implements Job {
     private static JobSchedulerProvider staticScheduler;
     private final ConsumerConfigService configService;
     private final JobSchedulerProvider scheduler;
+    @Setter
+    private static OcspCertificateVerificationService ocspVerificationService;//soma
 
     /** Creates a new job using static service reference. Used by JobRunr when deserializing jobs. */
     public ClientDynamicConfigJob() {
@@ -104,6 +105,9 @@ public class ClientDynamicConfigJob implements Job {
      */
     @Override
     public void run(final JobParams value) {
+//        if (ocspVerificationService != null) {//soma
+//            ocspVerificationService.verifyBeforeConnect();
+//        }
         final String nodeId = resolveNodeId(value);
         log.info(LOG_START, nodeId);
 
@@ -304,12 +308,14 @@ public class ClientDynamicConfigJob implements Job {
         switch (type.toLowerCase()) {
             case PRODUCT_TYPE_TOPIC: {
                 final ClientGRPCJobParams params = buildJobParams(product, conn, nodeId);
-                final Job jobInstance = new ClientGRPCJob(params);
+                final Job jobInstance = new ClientGRPCJob(params);//soma
+                ClientGRPCJob.setOcspVerificationService(ocspVerificationService);
                 return buildRecurrentJobRequest(jobInstance, params);
             }
             case PRODUCT_TYPE_FILE: {
                 final ClientFileExchangeGRPCJobParams params = buildFileExchangeJobParams(product, conn, nodeId);
                 final Job jobInstance = new ClientGRPCFileExchangeJob(params);
+                ClientGRPCFileExchangeJob.setOcspVerificationService(ocspVerificationService);//soma
                 return buildRecurrentJobRequest(jobInstance, params);
             }
             default:

@@ -2,11 +2,14 @@ package uk.gov.dbt.ndtp.federator.client.jobs.handlers;
 
 import java.util.function.Supplier;
 import java.util.function.ToLongBiFunction;
+
+import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import uk.gov.dbt.ndtp.federator.client.grpc.GRPCFileClient;
 import uk.gov.dbt.ndtp.federator.client.jobs.Job;
 import uk.gov.dbt.ndtp.federator.client.jobs.params.ClientFileExchangeGRPCJobParams;
 import uk.gov.dbt.ndtp.federator.client.jobs.params.JobParams;
+import uk.gov.dbt.ndtp.federator.common.service.ocsp.OcspCertificateVerificationService;
 import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
 import uk.gov.dbt.ndtp.federator.common.utils.RedisUtil;
 import uk.gov.dbt.ndtp.federator.exceptions.ClientGRPCJobException;
@@ -18,6 +21,8 @@ public class ClientGRPCFileExchangeJob implements Job {
     private Supplier<String> prefixSupplier;
     private ClientFileExchangeGRPCJobParams request;
     private ToLongBiFunction<String, String> offsetProvider;
+    @Setter
+    private static OcspCertificateVerificationService ocspVerificationService;//soma
 
     /** Default constructor wires real implementations for backward compatibility. */
     public ClientGRPCFileExchangeJob() {
@@ -33,6 +38,11 @@ public class ClientGRPCFileExchangeJob implements Job {
 
     @Override
     public void run(JobParams value) {
+        if (ocspVerificationService != null) {//soma
+            ocspVerificationService.verifyBeforeConnect();
+        }
+        else {     log.warn("ocspVerificationService is NULL — OCSP check skipped for this job!");
+        }
         if (request == null) {
             request = (ClientFileExchangeGRPCJobParams) value;
         }
