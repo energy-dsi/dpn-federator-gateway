@@ -200,7 +200,7 @@ public class ChecksumValidationReporter {
             row("Org Name",         nvl(orgName)),    // from destination filename segment[1]
             row("Schema Name",      nvl(schemaName)), // from destination filename segment[0]
             row("Product Name",     nvl(productName)),// from destination filename segment[2]
-            row("File name",        nvl(fileName)),
+            row("Source File name",        nvl(fileName)),
             row("Sequence ID",      String.valueOf(fileSequenceId)),
             row("Total chunks",     String.valueOf(totalChunks)),
             row("Algorithm",        "SHA-256"),
