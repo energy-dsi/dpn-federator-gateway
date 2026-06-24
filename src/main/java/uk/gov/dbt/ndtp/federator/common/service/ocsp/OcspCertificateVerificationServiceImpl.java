@@ -97,7 +97,21 @@ public class OcspCertificateVerificationServiceImpl
 
             throw new CertificateRevokedException(
 
-                    "Certificate is REVOKED/EXPIRED. clientId=" + clientId );
+                    "Certificate is REVOKED. clientId=" + clientId );
+
+        }
+        if (status == OcspStatus.EXPIRED) {
+
+            throw new CertificateRevokedException(
+
+                    "Certificate is EXPIRED. clientId=" + clientId );
+
+        }
+        if (status == OcspStatus.NOT_FOUND) {
+
+            throw new CertificateRevokedException(
+
+                    "Certificate is NOT_FOUND. clientId=" + clientId );
 
         }
 
