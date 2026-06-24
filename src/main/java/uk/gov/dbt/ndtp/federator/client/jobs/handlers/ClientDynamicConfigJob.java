@@ -105,9 +105,7 @@ public class ClientDynamicConfigJob implements Job {
      */
     @Override
     public void run(final JobParams value) {
-//        if (ocspVerificationService != null) {//soma
-//            ocspVerificationService.verifyBeforeConnect();
-//        }
+
         final String nodeId = resolveNodeId(value);
         log.info(LOG_START, nodeId);
 
@@ -308,7 +306,7 @@ public class ClientDynamicConfigJob implements Job {
         switch (type.toLowerCase()) {
             case PRODUCT_TYPE_TOPIC: {
                 final ClientGRPCJobParams params = buildJobParams(product, conn, nodeId);
-                final Job jobInstance = new ClientGRPCJob(params);//soma
+                final Job jobInstance = new ClientGRPCJob(params);
                 ClientGRPCJob.setOcspVerificationService(ocspVerificationService);
                 ClientGRPCJob.setProducerIdpClientId(producerIdpClientId);
                 return buildRecurrentJobRequest(jobInstance, params);
@@ -316,7 +314,7 @@ public class ClientDynamicConfigJob implements Job {
             case PRODUCT_TYPE_FILE: {
                 final ClientFileExchangeGRPCJobParams params = buildFileExchangeJobParams(product, conn, nodeId);
                 final Job jobInstance = new ClientGRPCFileExchangeJob(params);
-                ClientGRPCFileExchangeJob.setOcspVerificationService(ocspVerificationService);//soma
+                ClientGRPCFileExchangeJob.setOcspVerificationService(ocspVerificationService);
                 ClientGRPCFileExchangeJob.setProducerIdpClientId(producerIdpClientId);
                 return buildRecurrentJobRequest(jobInstance, params);
             }

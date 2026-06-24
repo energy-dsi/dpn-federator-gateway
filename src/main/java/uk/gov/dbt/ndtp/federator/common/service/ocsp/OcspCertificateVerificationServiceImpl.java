@@ -161,7 +161,7 @@ public class OcspCertificateVerificationServiceImpl
 
 
 
-    private X509Certificate loadClientCertificate() {//soma undo with //clientProps.getProperty("client.P12");
+    private X509Certificate loadClientCertificate() {
         try (InputStream is = new FileInputStream(clientProps.getProperty("client.p12FilePath"))) {
             KeyStore ks = KeyStore.getInstance("PKCS12");
             ks.load(is, p12Password.toCharArray());

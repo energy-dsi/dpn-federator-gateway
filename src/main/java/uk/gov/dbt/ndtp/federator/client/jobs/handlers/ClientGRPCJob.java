@@ -35,7 +35,7 @@ public class ClientGRPCJob implements Job {
     @Setter
     private ClientGRPCJobParams request;
     @Setter
-    private static OcspCertificateVerificationService ocspVerificationService;//soma
+    private static OcspCertificateVerificationService ocspVerificationService;
     @Setter
     private static String producerIdpClientId;
 
@@ -54,7 +54,7 @@ public class ClientGRPCJob implements Job {
 
     @Override
     public void run(JobParams value) {
-        if (ocspVerificationService != null) {//soma
+        if (ocspVerificationService != null) {
             ocspVerificationService.verifyBeforeConnect(producerIdpClientId);
         }
         else {     log.warn("ocspVerificationService is NULL — OCSP check skipped for this job!");

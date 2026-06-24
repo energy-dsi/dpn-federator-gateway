@@ -22,7 +22,7 @@ public class ClientGRPCFileExchangeJob implements Job {
     private ClientFileExchangeGRPCJobParams request;
     private ToLongBiFunction<String, String> offsetProvider;
     @Setter
-    private static OcspCertificateVerificationService ocspVerificationService;//soma
+    private static OcspCertificateVerificationService ocspVerificationService;
 
     @Setter
     public static String ProducerIdpClientId;
@@ -43,7 +43,7 @@ public class ClientGRPCFileExchangeJob implements Job {
 
     @Override
     public void run(JobParams value) {
-        if (ocspVerificationService != null) {//soma
+        if (ocspVerificationService != null) {
             ocspVerificationService.verifyBeforeConnect(ProducerIdpClientId);
         }
         else {     log.warn("ocspVerificationService is NULL — OCSP check skipped for this job!");
