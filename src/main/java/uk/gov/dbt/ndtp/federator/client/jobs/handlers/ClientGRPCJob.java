@@ -36,6 +36,8 @@ public class ClientGRPCJob implements Job {
     private ClientGRPCJobParams request;
     @Setter
     private static OcspCertificateVerificationService ocspVerificationService;//soma
+    @Setter
+    private static String producerIdpClientId;
 
     /** Default constructor wires real implementations for backward compatibility. */
     public ClientGRPCJob() {
@@ -53,7 +55,7 @@ public class ClientGRPCJob implements Job {
     @Override
     public void run(JobParams value) {
         if (ocspVerificationService != null) {//soma
-            ocspVerificationService.verifyBeforeConnect();
+            ocspVerificationService.verifyBeforeConnect(producerIdpClientId);
         }
         else {     log.warn("ocspVerificationService is NULL — OCSP check skipped for this job!");
         }

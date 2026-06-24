@@ -24,6 +24,9 @@ public class ClientGRPCFileExchangeJob implements Job {
     @Setter
     private static OcspCertificateVerificationService ocspVerificationService;//soma
 
+    @Setter
+    public static String ProducerIdpClientId;
+
     /** Default constructor wires real implementations for backward compatibility. */
     public ClientGRPCFileExchangeJob() {
         this.prefixSupplier = () -> PropertyUtil.getPropertyValue(KAFKA_TOPIC_PREFIX, "");
@@ -36,10 +39,12 @@ public class ClientGRPCFileExchangeJob implements Job {
         this.request = request;
     }
 
+
+
     @Override
     public void run(JobParams value) {
         if (ocspVerificationService != null) {//soma
-            ocspVerificationService.verifyBeforeConnect();
+            ocspVerificationService.verifyBeforeConnect(ProducerIdpClientId);
         }
         else {     log.warn("ocspVerificationService is NULL — OCSP check skipped for this job!");
         }

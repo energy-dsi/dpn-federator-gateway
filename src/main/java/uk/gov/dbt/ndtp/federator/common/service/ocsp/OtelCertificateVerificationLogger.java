@@ -15,22 +15,21 @@ public class OtelCertificateVerificationLogger {
     private static final String ATTR_TIMESTAMP   = "dpn.certificate.verification_timestamp";
     private static final String ATTR_STATUS      = "dpn.certificate.verification_status";
 
-    public void log(String clientId, String serialNumber,
+    public void log(String clientId,
                     Instant timestamp, OcspStatus status) {
         try {
             MDC.put(ATTR_CLIENT_ID,  clientId);
-            MDC.put(ATTR_SERIAL,     serialNumber);
             MDC.put(ATTR_TIMESTAMP,  timestamp.toString());
             MDC.put(ATTR_STATUS,     status.name());
 
             if (status == OcspStatus.REVOKED) {
                 log.warn("OCSP Certificate verification: status={}, clientId={}," +
-                                " serial={}, timestamp={}",
-                        status, clientId, serialNumber, timestamp);
+                                "  timestamp={}",
+                        status, clientId, timestamp);
             } else {
                 log.info("OCSP Certificate verification: status={}, clientId={}," +
-                                " serial={}, timestamp={}",
-                        status, clientId, serialNumber, timestamp);
+                                "  timestamp={}",
+                        status, clientId,  timestamp);
             }
         } finally {
             MDC.remove(ATTR_CLIENT_ID);

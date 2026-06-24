@@ -273,7 +273,7 @@ public class ClientDynamicConfigJob implements Job {
             final List<RecurrentJobRequest> requests) {
         for (ProductDTO product : producer.getProducts()) {
             if (isValidProduct(product)) {
-                addJobRequest(product, conn, nodeId, requests);
+                addJobRequest(product, conn, nodeId, requests, producer.getIdpClientId());
             }
         }
     }
@@ -286,8 +286,8 @@ public class ClientDynamicConfigJob implements Job {
             final ProductDTO product,
             final ConnectionProperties conn,
             final String nodeId,
-            final List<RecurrentJobRequest> requests) {
-        final RecurrentJobRequest request = createJobRequest(product, conn, nodeId);
+            final List<RecurrentJobRequest> requests, String producerIdpClientId) {
+        final RecurrentJobRequest request = createJobRequest(product, conn, nodeId, producerIdpClientId);
         requests.add(request);
         log.debug(
                 LOG_JOB,
@@ -299,7 +299,7 @@ public class ClientDynamicConfigJob implements Job {
     }
 
     private RecurrentJobRequest createJobRequest(
-            final ProductDTO product, final ConnectionProperties conn, final String nodeId) {
+            final ProductDTO product, final ConnectionProperties conn, final String nodeId, String producerIdpClientId) {
         final String type = product.getType();
         if (type == null) {
             throw new IllegalArgumentException("Product type cannot be null for product: " + product.getName());
@@ -310,12 +310,14 @@ public class ClientDynamicConfigJob implements Job {
                 final ClientGRPCJobParams params = buildJobParams(product, conn, nodeId);
                 final Job jobInstance = new ClientGRPCJob(params);//soma
                 ClientGRPCJob.setOcspVerificationService(ocspVerificationService);
+                ClientGRPCJob.setProducerIdpClientId(producerIdpClientId);
                 return buildRecurrentJobRequest(jobInstance, params);
             }
             case PRODUCT_TYPE_FILE: {
                 final ClientFileExchangeGRPCJobParams params = buildFileExchangeJobParams(product, conn, nodeId);
                 final Job jobInstance = new ClientGRPCFileExchangeJob(params);
                 ClientGRPCFileExchangeJob.setOcspVerificationService(ocspVerificationService);//soma
+                ClientGRPCFileExchangeJob.setProducerIdpClientId(producerIdpClientId);
                 return buildRecurrentJobRequest(jobInstance, params);
             }
             default:

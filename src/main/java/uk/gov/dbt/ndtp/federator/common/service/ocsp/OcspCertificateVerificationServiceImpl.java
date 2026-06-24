@@ -59,19 +59,19 @@ public class OcspCertificateVerificationServiceImpl
     }
     @Override
 
-    public void verifyBeforeConnect() {
+    public void verifyBeforeConnect(String producerIdpClientId) {
 
         Instant timestamp = Instant.now();
 
         // Load cert and extract serial number
 
-        X509Certificate cert = loadClientCertificate();
-
-        String serialNumber = cert.getSerialNumber()
-
-                .toString(16)
-
-                .toUpperCase();
+//        X509Certificate cert = loadClientCertificate();
+//
+//        String serialNumber = cert.getSerialNumber()
+//
+//                .toString(16)
+//
+//                .toUpperCase();
 
         OcspStatus status;
 
@@ -79,27 +79,25 @@ public class OcspCertificateVerificationServiceImpl
 
             // Pass both clientId AND serialNumber to AC3 endpoint
 
-            status = checkCertificateStatus(clientId, serialNumber);
+            status = checkCertificateStatus(producerIdpClientId);
 
         } catch (Exception e) {
 
-            otelLogger.log(clientId, serialNumber, timestamp, OcspStatus.NOT_FOUND);
+            otelLogger.log(producerIdpClientId, timestamp, OcspStatus.NOT_FOUND);
 
             throw new OcspVerificationException(
 
-                    "OCSP check failed for cert: " + serialNumber, e);
+                    "OCSP check failed for producer IdpClientId : " + producerIdpClientId, e);
 
         }
 
-        otelLogger.log(clientId, serialNumber, timestamp, status);
+        otelLogger.log(clientId, timestamp, status);
 
         if (status == OcspStatus.REVOKED) {
 
             throw new CertificateRevokedException(
 
-                    "Certificate is REVOKED/EXPIRED. clientId=" + clientId +
-
-                            ", serial=" + serialNumber);
+                    "Certificate is REVOKED/EXPIRED. clientId=" + clientId );
 
         }
 
@@ -107,15 +105,13 @@ public class OcspCertificateVerificationServiceImpl
 
     private OcspStatus checkCertificateStatus(
 
-            String clientId, String serialNumber) throws Exception {
+            String clientId) throws Exception {
 
         // Build URL with both clientId and serialNumber
 
         String url = managementNodeBaseUrl +
 
-                "/api/v1/certificate/ocsp?clientId=" + clientId +
-
-                "&serialNumber=" + serialNumber;
+                "/api/v1/certificate/ocsp?clientId=" + clientId ;
 
         String token = idpTokenService.fetchToken();
 

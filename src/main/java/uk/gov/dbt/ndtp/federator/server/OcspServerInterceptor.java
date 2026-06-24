@@ -24,7 +24,7 @@ import uk.gov.dbt.ndtp.federator.exceptions.OcspVerificationException;
 
             try {
                 log.info("inside OcspServerInterceptor. Going to call ocspService.verifyBeforeConnect()");
-                ocspService.verifyBeforeConnect();
+                ocspService.verifyBeforeConnect("");
                 // OCSP check passed — continue to next interceptor
                 return next.startCall(call, headers);
 

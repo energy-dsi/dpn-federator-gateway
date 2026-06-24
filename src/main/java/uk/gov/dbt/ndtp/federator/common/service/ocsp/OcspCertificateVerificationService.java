@@ -7,5 +7,6 @@ package uk.gov.dbt.ndtp.federator.common.service.ocsp;
  *
  */
 public interface OcspCertificateVerificationService {
-    void verifyBeforeConnect();
+
+    void verifyBeforeConnect(String producerIdpClientId);
 }
