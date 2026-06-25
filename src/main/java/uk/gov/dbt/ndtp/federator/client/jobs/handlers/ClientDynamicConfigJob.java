@@ -59,7 +59,7 @@ public class ClientDynamicConfigJob implements Job {
     private final ConsumerConfigService configService;
     private final JobSchedulerProvider scheduler;
     @Setter
-    private static OcspCertificateVerificationService ocspVerificationService;//soma
+    private static OcspCertificateVerificationService ocspVerificationService;
 
     /** Creates a new job using static service reference. Used by JobRunr when deserializing jobs. */
     public ClientDynamicConfigJob() {

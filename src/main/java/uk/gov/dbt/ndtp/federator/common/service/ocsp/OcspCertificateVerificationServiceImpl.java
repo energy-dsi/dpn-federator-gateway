@@ -5,7 +5,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import uk.gov.dbt.ndtp.federator.common.service.idp.IdpTokenService;
 import uk.gov.dbt.ndtp.federator.common.utils.SSLUtils;
-import uk.gov.dbt.ndtp.federator.exceptions.CertificateRevokedException;
 import uk.gov.dbt.ndtp.federator.exceptions.OcspVerificationException;
 
 import javax.net.ssl.SSLContext;
@@ -31,7 +30,6 @@ public class OcspCertificateVerificationServiceImpl
 
     private final String p12Password;      // from property: client.ssl.key-store-password
     private final String managementNodeBaseUrl;
-    private final String clientId;
     private final HttpClient httpClient;
     private final OtelCertificateVerificationLogger otelLogger;
     private final Properties clientProps;
@@ -43,7 +41,6 @@ public class OcspCertificateVerificationServiceImpl
         this.p12Password     = clientProps.getProperty("client.p12Password");
 
 
-        this.clientId        = commonProps.getProperty("idp.client.id");
         this.managementNodeBaseUrl = clientProps.getProperty("management.node.base.url");
         this.idpTokenService = idpTokenService;
         this.otelLogger = new OtelCertificateVerificationLogger();
@@ -59,21 +56,11 @@ public class OcspCertificateVerificationServiceImpl
     }
     @Override
 
-    public void verifyBeforeConnect(String producerIdpClientId) {
+    public OcspStatus verifyBeforeConnect(String producerIdpClientId) {
 
         Instant timestamp = Instant.now();
 
-        // Load cert and extract serial number
-
-//        X509Certificate cert = loadClientCertificate();
-//
-//        String serialNumber = cert.getSerialNumber()
-//
-//                .toString(16)
-//
-//                .toUpperCase();
-
-        OcspStatus status;
+        OcspStatus status = OcspStatus.NOT_FOUND;
 
         try {
 
@@ -84,37 +71,10 @@ public class OcspCertificateVerificationServiceImpl
         } catch (Exception e) {
 
             otelLogger.log(producerIdpClientId, timestamp, OcspStatus.NOT_FOUND);
-
-            throw new OcspVerificationException(
-
-                    "OCSP check failed for producer IdpClientId : " + producerIdpClientId, e);
-
         }
 
-        otelLogger.log(clientId, timestamp, status);
-
-        if (status == OcspStatus.REVOKED) {
-
-            throw new CertificateRevokedException(
-
-                    "Certificate is REVOKED. clientId=" + clientId );
-
-        }
-        if (status == OcspStatus.EXPIRED) {
-
-            throw new CertificateRevokedException(
-
-                    "Certificate is EXPIRED. clientId=" + clientId );
-
-        }
-        if (status == OcspStatus.NOT_FOUND) {
-
-            throw new CertificateRevokedException(
-
-                    "Certificate is NOT_FOUND. clientId=" + clientId );
-
-        }
-
+        otelLogger.log(producerIdpClientId, timestamp, status);
+        return status;
     }
 
     private OcspStatus checkCertificateStatus(
