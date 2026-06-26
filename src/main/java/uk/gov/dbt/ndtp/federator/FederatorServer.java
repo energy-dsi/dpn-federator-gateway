@@ -36,6 +36,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import uk.gov.dbt.ndtp.federator.common.service.heartbeat.HeartbeatScheduler;
+import uk.gov.dbt.ndtp.federator.common.utils.ProducerConsumerConfigServiceFactory;
 import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
 import uk.gov.dbt.ndtp.federator.common.utils.ThreadUtil;
 import uk.gov.dbt.ndtp.federator.server.grpc.GRPCServer;
@@ -104,7 +106,10 @@ public class FederatorServer {
         String sHeaders = PropertyUtil.getPropertyValue(SHARED_HEADERS, CONTENT_TYPE);
         Set<String> sharedHeaders = Set.of(sHeaders.split(HEADER_SEPARATOR));
         LOGGER.info("Shared Headers - '{}'", sharedHeaders);
-        try (GRPCServer server = new GRPCServer(sharedHeaders)) {
+        try (GRPCServer server = new GRPCServer(sharedHeaders);
+             HeartbeatScheduler heartbeatScheduler =
+                     new HeartbeatScheduler(ProducerConsumerConfigServiceFactory.getProducerConfigService())) {
+            heartbeatScheduler.start();
             futureList.add(THREADED_EXECUTOR.submit(server::start));
             ThreadUtil.awaitShutdown(futureList, server, THREADED_EXECUTOR);
             LOGGER.debug("Post ThreadUtil Shutdown");
