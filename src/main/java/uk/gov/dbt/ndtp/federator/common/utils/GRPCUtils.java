@@ -70,8 +70,9 @@ public class GRPCUtils {
 
         return switch (authMode) {
             case "private_key_jwt" -> {
-                // No client cert required on the HttpClient; only server-TLS (truststore) needed.
-                HttpClient client = HttpClientFactoryUtils.createHttpClient(properties);
+                // HttpClient client = HttpClientFactoryUtils.createHttpClient(properties);
+                // Modified as private key JWT also require mTLS to be performed at edge layer
+                HttpClient client = HttpClientFactoryUtils.createHttpClientWithMtls(properties);
                 yield new IdpTokenServicePrivateJwtImpl(client, mapper, properties);
             }
             case "mtls" -> {
