@@ -27,9 +27,6 @@
 package uk.gov.dbt.ndtp.federator;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import java.io.File;
-import java.net.http.HttpClient;
-import java.util.Properties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import uk.gov.dbt.ndtp.federator.client.connection.ConnectionProperties;
@@ -40,6 +37,8 @@ import uk.gov.dbt.ndtp.federator.client.jobs.handlers.ClientDynamicConfigJob;
 import uk.gov.dbt.ndtp.federator.common.management.ManagementNodeDataHandler;
 import uk.gov.dbt.ndtp.federator.common.service.config.ConsumerConfigService;
 import uk.gov.dbt.ndtp.federator.common.service.idp.IdpTokenService;
+import uk.gov.dbt.ndtp.federator.common.service.ocsp.OcspCertificateVerificationService;
+import uk.gov.dbt.ndtp.federator.common.service.ocsp.OcspCertificateVerificationServiceImpl;
 import uk.gov.dbt.ndtp.federator.common.service.secret.SecretProvider;
 import uk.gov.dbt.ndtp.federator.common.storage.InMemoryConfigurationStore;
 import uk.gov.dbt.ndtp.federator.common.utils.GRPCUtils;
@@ -47,6 +46,10 @@ import uk.gov.dbt.ndtp.federator.common.utils.HttpClientFactoryUtils;
 import uk.gov.dbt.ndtp.federator.common.utils.ObjectMapperUtil;
 import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
 import uk.gov.dbt.ndtp.federator.exceptions.ConfigurationException;
+
+import java.io.File;
+import java.net.http.HttpClient;
+import java.util.Properties;
 
 /**
  * Main class for the Federator client.
@@ -81,7 +84,6 @@ public class FederatorClient {
     /**
      * Creates client with specified dependencies.
      *
-     * @param builder GRPC client builder
      * @param service configuration service
      * @param scheduler job scheduler provider
      */
@@ -92,7 +94,6 @@ public class FederatorClient {
     /**
      * Creates client with all dependencies.
      *
-     * @param builder GRPC client builder
      * @param service configuration service
      * @param scheduler job scheduler provider
      * @param exitHandler exit handler
@@ -113,7 +114,9 @@ public class FederatorClient {
         LOGGER.info(LOG_INIT);
         initProperties();
         ConsumerConfigService service = createConfigService();
+        OcspCertificateVerificationService ocspService = createOcspService();
         ClientDynamicConfigJob.initialize(service);
+        ClientDynamicConfigJob.setOcspVerificationService(ocspService);
         JobSchedulerProvider scheduler = new DefaultJobSchedulerProvider();
         ClientDynamicConfigJob.setScheduler(scheduler);
         new FederatorClient(service, scheduler).run();
@@ -263,5 +266,24 @@ public class FederatorClient {
         public void exit(final int code) {
             System.exit(code);
         }
+    }
+    private static OcspCertificateVerificationService createOcspService() {
+        Properties clientProps = new Properties();
+        clientProps.setProperty("client.p12FilePath",
+                PropertyUtil.getPropertyValue("client.p12FilePath"));
+        clientProps.setProperty("client.p12Password",
+                PropertyUtil.getPropertyValue("client.p12Password"));
+        clientProps.setProperty("client.truststoreFilePath",
+                PropertyUtil.getPropertyValue("client.truststoreFilePath"));
+        clientProps.setProperty("client.truststorePassword",
+                PropertyUtil.getPropertyValue("client.truststorePassword"));
+        clientProps.setProperty("management.node.base.url",
+                PropertyUtil.getPropertyValue("management.node.base.url"));
+        clientProps.setProperty("ocsp.cache.ttl.seconds",
+                PropertyUtil.getPropertyValue("ocsp.cache.ttl.seconds", "300"));
+        Properties commonProps = PropertyUtil.getPropertiesFromFilePath(COMMON_CONFIG);
+
+        IdpTokenService idpTokenService = GRPCUtils.createIdpTokenService();
+        return new OcspCertificateVerificationServiceImpl(clientProps, commonProps, idpTokenService);
     }
 }

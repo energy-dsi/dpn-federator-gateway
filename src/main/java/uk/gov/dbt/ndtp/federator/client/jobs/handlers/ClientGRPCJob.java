@@ -1,8 +1,5 @@
 package uk.gov.dbt.ndtp.federator.client.jobs.handlers;
 
-import java.util.function.BiFunction;
-import java.util.function.Supplier;
-import java.util.function.ToLongBiFunction;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import uk.gov.dbt.ndtp.federator.WrappedGRPCClient;
@@ -11,9 +8,15 @@ import uk.gov.dbt.ndtp.federator.client.grpc.GRPCTopicClient;
 import uk.gov.dbt.ndtp.federator.client.jobs.Job;
 import uk.gov.dbt.ndtp.federator.client.jobs.params.ClientGRPCJobParams;
 import uk.gov.dbt.ndtp.federator.client.jobs.params.JobParams;
+import uk.gov.dbt.ndtp.federator.common.service.ocsp.OcspCertificateVerificationService;
+import uk.gov.dbt.ndtp.federator.common.service.ocsp.OcspStatus;
 import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
 import uk.gov.dbt.ndtp.federator.common.utils.RedisUtil;
 import uk.gov.dbt.ndtp.federator.exceptions.ClientGRPCJobException;
+
+import java.util.function.BiFunction;
+import java.util.function.Supplier;
+import java.util.function.ToLongBiFunction;
 
 @Slf4j
 public class ClientGRPCJob implements Job {
@@ -32,6 +35,10 @@ public class ClientGRPCJob implements Job {
 
     @Setter
     private ClientGRPCJobParams request;
+    @Setter
+    private static OcspCertificateVerificationService ocspVerificationService;
+    @Setter
+    private static String producerIdpClientId;
 
     /** Default constructor wires real implementations for backward compatibility. */
     public ClientGRPCJob() {
@@ -48,6 +55,13 @@ public class ClientGRPCJob implements Job {
 
     @Override
     public void run(JobParams value) {
+        if (ocspVerificationService != null) {
+            OcspStatus ocspStatus = ocspVerificationService.verifyBeforeConnect(producerIdpClientId);
+            if(ocspStatus != OcspStatus.ACTIVE)
+                return;
+        }
+        else {     log.warn("ocspVerificationService is NULL — OCSP check skipped for this job!");
+        }
         final String prefix = prefixSupplier.get();
 
         if (request == null) {
