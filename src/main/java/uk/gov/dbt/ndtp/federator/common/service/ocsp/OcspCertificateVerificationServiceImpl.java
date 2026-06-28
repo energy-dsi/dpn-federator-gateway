@@ -64,8 +64,6 @@ public class OcspCertificateVerificationServiceImpl
 
         try {
 
-            // Pass both clientId AND serialNumber to AC3 endpoint
-
             status = checkCertificateStatus(producerIdpClientId);
 
         } catch (Exception e) {

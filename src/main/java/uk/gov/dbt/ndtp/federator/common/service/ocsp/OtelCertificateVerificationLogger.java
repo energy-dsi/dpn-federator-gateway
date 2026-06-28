@@ -22,13 +22,13 @@ public class OtelCertificateVerificationLogger {
             MDC.put(ATTR_TIMESTAMP,  timestamp.toString());
             MDC.put(ATTR_STATUS,     status.name());
 
-            if (status == OcspStatus.REVOKED) {
-                log.warn("OCSP Certificate verification: status={}, clientId={}," +
+            if (status == OcspStatus.ACTIVE) {
+                log.info("OCSP Certificate verification: status={}, clientId={}," +
                                 "  timestamp={}",
                         status, clientId, timestamp);
             } else {
-                log.info("OCSP Certificate verification: status={}, clientId={}," +
-                                "  timestamp={}",
+                log.error("403 Forbidden: Call cannot proceed. OCSP Certificate verification: status={}, clientId={}," +
+                                "  timestamp={}.",
                         status, clientId,  timestamp);
             }
         } finally {
