@@ -3,13 +3,25 @@
 // and maintained by the National Digital Twin Programme.
 package uk.gov.dbt.ndtp.federator.client.jobs.handlers;
 
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.api.trace.StatusCode;
+import io.opentelemetry.api.trace.Tracer;
+import io.opentelemetry.context.Scope;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
+
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import uk.gov.dbt.ndtp.federator.client.connection.ConnectionProperties;
 import uk.gov.dbt.ndtp.federator.client.jobs.Job;
 import uk.gov.dbt.ndtp.federator.client.jobs.JobSchedulerProvider;
 import uk.gov.dbt.ndtp.federator.client.jobs.JobsConstants;
-import uk.gov.dbt.ndtp.federator.client.jobs.params.*;
+import uk.gov.dbt.ndtp.federator.client.jobs.params.ClientFileExchangeGRPCJobParams;
+import uk.gov.dbt.ndtp.federator.client.jobs.params.ClientGRPCJobParams;
+import uk.gov.dbt.ndtp.federator.client.jobs.params.FileExchangeProperties;
+import uk.gov.dbt.ndtp.federator.client.jobs.params.JobParams;
+import uk.gov.dbt.ndtp.federator.client.jobs.params.RecurrentJobRequest;
 import uk.gov.dbt.ndtp.federator.client.jobs.schedule.ScheduleAttributesResolver;
 import uk.gov.dbt.ndtp.federator.common.management.ManagementNodeDataException;
 import uk.gov.dbt.ndtp.federator.common.model.dto.ConsumerConfigDTO;
@@ -18,11 +30,8 @@ import uk.gov.dbt.ndtp.federator.common.model.dto.ProductConsumerDTO;
 import uk.gov.dbt.ndtp.federator.common.model.dto.ProductDTO;
 import uk.gov.dbt.ndtp.federator.common.service.config.ConsumerConfigService;
 import uk.gov.dbt.ndtp.federator.common.service.ocsp.OcspCertificateVerificationService;
+import uk.gov.dbt.ndtp.federator.common.telemetry.OpenTelemetryConfig;
 import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
-
-import java.time.Duration;
-import java.util.ArrayList;
-import java.util.List;
 
 /**
  * Job handler for dynamic configuration updates from Management Node. Fetches producer
@@ -105,11 +114,20 @@ public class ClientDynamicConfigJob implements Job {
      */
     @Override
     public void run(final JobParams value) {
-
         final String nodeId = resolveNodeId(value);
         log.info(LOG_START, nodeId);
 
-        try {
+        // Manual span: provides trace_id/span_id/trace_flags on every log line emitted during
+        // this config-refresh cycle (OtelJsonLayout reads Span.current() directly). Purely
+        // additive - wraps the EXACT original try/catch structure below with no change to
+        // control flow, the early return, or either catch block. Job creation/scheduling logic
+        // in updateDynamicConfigJob()/reloadJobs() (and the file/topic streaming jobs they
+        // create) is completely untouched.
+        Tracer tracer = OpenTelemetryConfig.get().getTracer("uk.gov.dbt.ndtp.federator.client.jobs");
+        Span span = tracer.spanBuilder("ClientDynamicConfigJob.run")
+                .setAttribute("dpn.node_id", nodeId)
+                .startSpan();
+        try (Scope scope = span.makeCurrent()) {
             final ConsumerConfigDTO config = configService.getConsumerConfiguration();
             if (config == null) {
                 log.warn(LOG_NO_CONFIG, nodeId);
@@ -118,9 +136,15 @@ public class ClientDynamicConfigJob implements Job {
             updateDynamicConfigJob();
             reloadJobs(config, nodeId);
         } catch (ManagementNodeDataException e) {
+            span.recordException(e);
+            span.setStatus(StatusCode.ERROR, e.getMessage());
             log.error(LOG_ERROR, nodeId, e.getMessage(), e);
         } catch (Exception e) {
+            span.recordException(e);
+            span.setStatus(StatusCode.ERROR, e.getMessage());
             log.error(LOG_ERROR_UNEXP, nodeId, e.getMessage(), e);
+        } finally {
+            span.end();
         }
     }
 

@@ -32,12 +32,14 @@ import io.grpc.ChannelCredentials;
 import io.grpc.Grpc;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
+import io.opentelemetry.instrumentation.grpc.v1_6.GrpcTelemetry;
 import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import uk.gov.dbt.ndtp.federator.client.grpc.interceptor.AuthClientInterceptor;
 import uk.gov.dbt.ndtp.federator.client.grpc.interceptor.CustomClientInterceptor;
 import uk.gov.dbt.ndtp.federator.common.service.idp.IdpTokenService;
+import uk.gov.dbt.ndtp.federator.common.telemetry.OpenTelemetryConfig;
 import uk.gov.dbt.ndtp.federator.common.utils.GRPCUtils;
 import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
 
@@ -80,9 +82,14 @@ public interface GRPCClient extends AutoCloseable {
 
     private ManagedChannelBuilder<?> configureChannelBuilder(ManagedChannelBuilder<?> builder) {
         IdpTokenService tokenService = GRPCUtils.createIdpTokenService();
+        // DSI EDIT: GrpcTelemetry creates a real OTel span per outgoing call and injects the
+        // W3C trace context into gRPC metadata automatically.
+        // GrpcTelemetry grpcTelemetry = GrpcTelemetry.create(OpenTelemetryConfig.get()); // DISABLED: NoClassDefFoundError NetworkAttributes
         return builder.keepAliveTime(PropertyUtil.getPropertyIntValue(CLIENT_KEEP_ALIVE_TIME, THIRTY), TimeUnit.SECONDS)
                 .keepAliveTimeout(PropertyUtil.getPropertyIntValue(CLIENT_KEEP_ALIVE_TIMEOUT, TEN), TimeUnit.SECONDS)
                 .idleTimeout(PropertyUtil.getPropertyIntValue(CLIENT_IDLE_TIMEOUT, TEN), TimeUnit.SECONDS)
-                .intercept(new CustomClientInterceptor(), new AuthClientInterceptor(tokenService));
+                .intercept(
+                        new CustomClientInterceptor(),
+                        new AuthClientInterceptor(tokenService));
     }
 }

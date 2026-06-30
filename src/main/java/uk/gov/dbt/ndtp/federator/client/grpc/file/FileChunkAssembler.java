@@ -159,6 +159,29 @@ public class FileChunkAssembler {
         return handleLastChunk(chunk, fileName, key, state, seqId);
     }
 
+    /**
+     * Collect variant used by file versioning. Assembles a chunk exactly like {@link #accept}, but on the
+     * last chunk it moves the completed file to a unique staging path (keyed by sequence id so same-named
+     * files do not clobber one another) and returns its {@link FileVersionPlanner.CollectedFile} descriptor
+     * WITHOUT storing it. The caller collects all descriptors and finalizes versioning at end-of-stream via
+     * {@link FileVersionFinalizer}. Returns {@code null} for non-final chunks.
+     *
+     * <p>Checksum and size verification are applied identically to {@link #accept}.
+     */
+    @SneakyThrows
+    public synchronized FileVersionPlanner.CollectedFile acceptToStaging(FileChunk chunk) {
+        String fileName = chunk.getFileName();
+        long seqId = chunk.getFileSequenceId();
+        String key = buildKey(fileName, seqId);
+        AssemblyState state = assemblies.get(key);
+
+        if (!chunk.getIsLastChunk()) {
+            handleDataChunk(chunk, fileName, key, state, seqId);
+            return null;
+        }
+        return handleLastChunkStaging(chunk, fileName, key, state, seqId);
+    }
+
     private void ensureDir(Path dir) {
         try {
             createDirectories(dir);
@@ -298,6 +321,44 @@ public class FileChunkAssembler {
             move(state.tempFile, finalTarget, REPLACE_EXISTING);
         }
         return finalTarget;
+    }
+
+    /**
+     * Verifies and stages the completed file to a unique path (keyed by sequence id), returning its
+     * descriptor for later versioned storage. Does not call the storage provider.
+     */
+    private FileVersionPlanner.CollectedFile handleLastChunkStaging(
+            FileChunk chunk, String fileName, String key, AssemblyState state, long seqId) {
+        if (state == null) {
+            state = startAssembly(fileName, seqId, chunk);
+            assemblies.put(key, state);
+        }
+        closeQuietly(state);
+
+        verifyChecksumIfProvided(chunk, state, key, fileName, seqId);
+        verifySizeIfProvided(chunk, state, key, fileName);
+
+        Path staged = moveToStaging(state, fileName, seqId);
+        assemblies.remove(key);
+        log.info("Staged file '{}' (seq {}) at {}", fileName, seqId, staged);
+        return new FileVersionPlanner.CollectedFile(seqId, fileName, staged.toAbsolutePath().toString());
+    }
+
+    /**
+     * Moves the assembled file to a unique staging path under {@code .staged}, named with the sequence id
+     * so two same-named files in the same stream do not overwrite each other before finalization.
+     */
+    @SneakyThrows
+    private Path moveToStaging(AssemblyState state, String fileName, long seqId) {
+        Path stagingDir = baseTempDir.resolve(".staged");
+        ensureDir(stagingDir);
+        Path staged = stagingDir.resolve(sanitize(fileName) + "." + seqId);
+        try {
+            move(state.tempFile, staged, REPLACE_EXISTING, ATOMIC_MOVE);
+        } catch (IOException moveEx) {
+            move(state.tempFile, staged, REPLACE_EXISTING);
+        }
+        return staged;
     }
 
     @SneakyThrows

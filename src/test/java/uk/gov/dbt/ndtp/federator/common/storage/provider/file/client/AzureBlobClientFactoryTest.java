@@ -147,6 +147,10 @@ class AzureBlobClientFactoryTest {
 
         try (MockedConstruction<WorkloadIdentityCredentialBuilder> mockedCredBuilder =
                 mockConstruction(WorkloadIdentityCredentialBuilder.class, (mock, context) -> {
+                    // The fluent .httpClient(...) call must return the mock itself so the chain
+                    // reaches .build() (otherwise it returns null by default and NPEs before
+                    // production code's own try/catch can wrap the failure as ConfigurationException).
+                    when(mock.httpClient(any())).thenReturn(mock);
                     when(mock.build()).thenThrow(new RuntimeException("Credential error"));
                 })) {
 

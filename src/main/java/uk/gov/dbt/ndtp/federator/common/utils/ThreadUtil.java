@@ -27,6 +27,7 @@
 package uk.gov.dbt.ndtp.federator.common.utils;
 
 import java.util.List;
+import java.util.concurrent.AbstractExecutorService;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -76,7 +77,77 @@ public class ThreadUtil {
         }
     }
 
+    /**
+     * DSI EDIT: returns an executor that propagates the current gRPC/OTel Context to every
+     * submitted task. Without this, trace_id/span_id appear blank for log lines that run on
+     * threads from this pool, even when the work originated from inside an actively-traced
+     * gRPC call - plain ExecutorService.submit(...) does not carry thread-local context across
+     * the handoff to a worker thread.
+     *
+     * <p>io.grpc.Context.currentContextExecutor(...) is the standard gRPC utility for this.
+     * It works for OTel spans too (not just gRPC's own deadline/cancellation context) because
+     * opentelemetry-grpc-1.6's instrumentation installs a Context.Storage bridge that makes
+     * io.grpc.Context and the OTel Context refer to each other - so wrapping with gRPC's own
+     * propagation utility also correctly carries the active span.
+     */
+    /**
+     * DSI EDIT: returns an executor that propagates the current gRPC/OTel Context to every
+     * submitted task. Without this, trace_id/span_id appear blank for log lines that run on
+     * threads from this pool, even when the work originated from inside an actively-traced
+     * gRPC call - plain ExecutorService.submit(...) does not carry thread-local context across
+     * the handoff to a worker thread.
+     *
+     * <p>Wraps each task with the gRPC Context active at submission time. This also carries
+     * OTel spans because opentelemetry-grpc-1.6's instrumentation installs a Context.Storage
+     * bridge making io.grpc.Context and the OTel Context refer to each other - so capturing the
+     * gRPC Context here also captures whichever OTel span is current.
+     */
     public static ExecutorService threadExecutor(String threadNamePrefix) {
-        return Executors.newCachedThreadPool(new ThreadFactoryWithNamePrefix(threadNamePrefix));
+        ExecutorService delegate = Executors.newCachedThreadPool(new ThreadFactoryWithNamePrefix(threadNamePrefix));
+        return new ContextPropagatingExecutorService(delegate);
+    }
+
+    /**
+     * Minimal ExecutorService decorator that captures io.grpc.Context.current() at the moment
+     * each task is submitted, and restores it on the worker thread for the duration of that
+     * task - preserving ExecutorService's full API (submit/invokeAll/shutdown/etc.), unlike
+     * io.grpc.Context.currentContextExecutor(...) which only returns a plain Executor.
+     */
+    private static final class ContextPropagatingExecutorService extends AbstractExecutorService {
+        private final ExecutorService delegate;
+
+        private ContextPropagatingExecutorService(ExecutorService delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public void execute(Runnable command) {
+            delegate.execute(io.grpc.Context.current().wrap(command));
+        }
+
+        @Override
+        public void shutdown() {
+            delegate.shutdown();
+        }
+
+        @Override
+        public java.util.List<Runnable> shutdownNow() {
+            return delegate.shutdownNow();
+        }
+
+        @Override
+        public boolean isShutdown() {
+            return delegate.isShutdown();
+        }
+
+        @Override
+        public boolean isTerminated() {
+            return delegate.isTerminated();
+        }
+
+        @Override
+        public boolean awaitTermination(long timeout, java.util.concurrent.TimeUnit unit) throws InterruptedException {
+            return delegate.awaitTermination(timeout, unit);
+        }
     }
 }

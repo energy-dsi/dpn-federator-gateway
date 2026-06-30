@@ -10,6 +10,7 @@ import java.nio.file.Path;
 import lombok.extern.slf4j.Slf4j;
 import uk.gov.dbt.ndtp.federator.client.storage.ReceivedFileStorage;
 import uk.gov.dbt.ndtp.federator.client.storage.StoredFileResult;
+import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
 
 /**
  * Local storage implementation. No remote upload is performed; returns the local path.
@@ -29,7 +30,7 @@ public class LocalReceivedFileStorage implements ReceivedFileStorage {
         // If a destination path is provided (e.g., "docs/guidelines.md"), move/rename the file exactly to that path.
         try {
             if (destination != null && !destination.isBlank()) {
-                Path targetPath = Path.of(destination).toAbsolutePath();
+                Path targetPath = PropertyUtil.resolveTarget(destination);
                 Path parent = targetPath.getParent();
                 if (parent != null) {
                     createDirectories(parent);

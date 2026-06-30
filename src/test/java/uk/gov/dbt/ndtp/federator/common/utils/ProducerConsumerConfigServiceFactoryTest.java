@@ -9,14 +9,27 @@ package uk.gov.dbt.ndtp.federator.common.utils;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
+import java.lang.reflect.Field;
 import java.net.http.HttpClient;
 import java.util.Properties;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import uk.gov.dbt.ndtp.federator.common.service.config.ProducerConfigService;
 import uk.gov.dbt.ndtp.federator.common.service.idp.IdpTokenService;
 
 class ProducerConsumerConfigServiceFactoryTest {
+
+    @AfterEach
+    void tearDown() throws Exception {
+        // Prevent the singleton created by this test from leaking into other test classes
+        // that run later in the same JVM (e.g. ConsumerVerificationServerInterceptorTest,
+        // KafkaStreamServiceTest), which would otherwise bypass their own MockedStatic setups.
+        // Reset is done via reflection here (test-only) so production code is left untouched.
+        Field field = ProducerConsumerConfigServiceFactory.class.getDeclaredField("producerConfigService");
+        field.setAccessible(true);
+        field.set(null, null);
+    }
 
     @Test
     void getProducerConfigService_returnsSingleton() {

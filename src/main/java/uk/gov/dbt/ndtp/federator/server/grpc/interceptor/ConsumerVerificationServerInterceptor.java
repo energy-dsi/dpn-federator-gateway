@@ -72,6 +72,10 @@ public class ConsumerVerificationServerInterceptor implements ServerInterceptor 
         }
 
         final Context contextWithClientId = Context.current().withValue(GRPCContextKeys.CLIENT_ID, consumerId);
+        // DSI EDIT: surfaces the verified consumer/participant identity as a real OTel span
+        // attribute (queryable in the trace backend) rather than a custom MDC field - the
+        // standard OTel pattern for domain-specific identifiers.
+        io.opentelemetry.api.trace.Span.current().setAttribute("dpn.participant_id", consumerId);
         log.debug("Authentication succeeded method={}", method);
         return Contexts.interceptCall(contextWithClientId, call, headers, next);
     }

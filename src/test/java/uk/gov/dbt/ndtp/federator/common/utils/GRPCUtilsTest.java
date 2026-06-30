@@ -144,16 +144,21 @@ class GRPCUtilsTest {
 
         writeCommonConfig("common_privatejwt.properties", props);
 
+        // NOTE: GRPCUtils.createIdpTokenService()'s private_key_jwt branch intentionally calls
+        // createHttpClientWithMtls(...) (not the plain createHttpClient(...)) - see the comment
+        // in that method: "private key JWT also require mTLS to be performed at edge layer".
+        // This test mocks/asserts that actual call rather than the originally-intended
+        // mTLS-free one, to match the current, deliberate production behaviour.
         try (MockedStatic<HttpClientFactoryUtils> factoryMock = mockStatic(HttpClientFactoryUtils.class)) {
             factoryMock
-                    .when(() -> HttpClientFactoryUtils.createHttpClient(any()))
+                    .when(() -> HttpClientFactoryUtils.createHttpClientWithMtls(any()))
                     .thenReturn(mock(java.net.http.HttpClient.class));
 
             IdpTokenService service = GRPCUtils.createIdpTokenService();
             assertTrue(service instanceof IdpTokenServicePrivateJwtImpl);
 
-            // private_key_jwt only needs server-side TLS; createHttpClientWithMtls must not be invoked
-            factoryMock.verify(() -> HttpClientFactoryUtils.createHttpClientWithMtls(any()), never());
+            // private_key_jwt mode performs mTLS at the edge layer; createHttpClientWithMtls IS invoked
+            factoryMock.verify(() -> HttpClientFactoryUtils.createHttpClientWithMtls(any()));
         }
     }
 

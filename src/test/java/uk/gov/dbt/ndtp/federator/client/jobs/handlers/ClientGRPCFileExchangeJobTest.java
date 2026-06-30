@@ -9,6 +9,7 @@ package uk.gov.dbt.ndtp.federator.client.jobs.handlers;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
+import io.opentelemetry.api.OpenTelemetry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -18,6 +19,7 @@ import uk.gov.dbt.ndtp.federator.client.connection.ConnectionProperties;
 import uk.gov.dbt.ndtp.federator.client.grpc.GRPCFileClient;
 import uk.gov.dbt.ndtp.federator.client.jobs.params.ClientFileExchangeGRPCJobParams;
 import uk.gov.dbt.ndtp.federator.client.jobs.params.FileExchangeProperties;
+import uk.gov.dbt.ndtp.federator.common.telemetry.OpenTelemetryConfig;
 import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
 import uk.gov.dbt.ndtp.federator.common.utils.RedisUtil;
 import uk.gov.dbt.ndtp.federator.exceptions.ClientGRPCJobException;
@@ -26,12 +28,19 @@ class ClientGRPCFileExchangeJobTest {
 
     private MockedStatic<PropertyUtil> propertyUtilMockedStatic;
     private MockedStatic<RedisUtil> redisUtilMockedStatic;
+    private MockedStatic<OpenTelemetryConfig> openTelemetryConfigMockedStatic;
     private RedisUtil redisUtil;
 
     @BeforeEach
     void setUp() {
         propertyUtilMockedStatic = mockStatic(PropertyUtil.class);
         redisUtilMockedStatic = mockStatic(RedisUtil.class);
+        // ClientGRPCFileExchangeJob.run() calls OpenTelemetryConfig.get() to start a manual
+        // span; in production this singleton is set once via initialize() at process startup,
+        // but unit tests never call that, so the static call must be mocked here to avoid
+        // "OpenTelemetryConfig.initialize() must be called before OpenTelemetryConfig.get()".
+        openTelemetryConfigMockedStatic = mockStatic(OpenTelemetryConfig.class);
+        openTelemetryConfigMockedStatic.when(OpenTelemetryConfig::get).thenReturn(OpenTelemetry.noop());
         redisUtil = mock(RedisUtil.class);
         redisUtilMockedStatic.when(RedisUtil::getInstance).thenReturn(redisUtil);
         propertyUtilMockedStatic
@@ -43,6 +52,7 @@ class ClientGRPCFileExchangeJobTest {
     void tearDown() {
         propertyUtilMockedStatic.close();
         redisUtilMockedStatic.close();
+        openTelemetryConfigMockedStatic.close();
     }
 
     @Test

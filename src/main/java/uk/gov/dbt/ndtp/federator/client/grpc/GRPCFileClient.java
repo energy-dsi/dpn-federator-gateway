@@ -3,11 +3,14 @@
 // Programme.
 package uk.gov.dbt.ndtp.federator.client.grpc;
 
-import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Iterator;
+import java.util.List;
 import lombok.extern.slf4j.Slf4j;
 import uk.gov.dbt.ndtp.federator.client.connection.ConnectionProperties;
 import uk.gov.dbt.ndtp.federator.client.grpc.file.FileChunkAssembler;
+import uk.gov.dbt.ndtp.federator.client.grpc.file.FileVersionFinalizer;
+import uk.gov.dbt.ndtp.federator.client.grpc.file.FileVersionPlanner;
 import uk.gov.dbt.ndtp.federator.common.utils.RedisUtil;
 import uk.gov.dbt.ndtp.federator.exceptions.FileAssemblyException;
 import uk.gov.dbt.ndtp.grpc.FileChunk;
@@ -91,7 +94,7 @@ public class GRPCFileClient extends GRPCAbstractClient {
         FileChunkAssembler assembler = new FileChunkAssembler(destination, this.serverName);
 
         try {
-            processFileStream(topic, offset, request, assembler);
+            processFileStream(topic, offset, destination, request, assembler);
         } catch (Exception e) {
             throw new FileAssemblyException("Unexpected error while processing file stream for topic " + topic, e);
         }
@@ -135,16 +138,34 @@ public class GRPCFileClient extends GRPCAbstractClient {
      * @param request the stream request
      * @param assembler file chunk assembler for file reconstruction
      */
-    private void processFileStream(String topic, long offset, FileStreamRequest request, FileChunkAssembler assembler) {
+    private void processFileStream(
+            String topic, long offset, String destination, FileStreamRequest request, FileChunkAssembler assembler) {
         Iterator<FileStreamEvent> events = getStub().getFilesStream(request);
-        long lastSeq = offset;
+        List<FileVersionPlanner.CollectedFile> collected = new ArrayList<>();
 
         while (events.hasNext()) {
             FileStreamEvent event = events.next();
-            lastSeq = handleStreamEvent(topic, event, assembler, lastSeq);
+            handleStreamEvent(topic, event, assembler, collected);
         }
 
-        log.info("Finished processing stream for topic '{}' at sequence id {}", topic, lastSeq);
+        // End of stream: now that the full file list is known, apply versioning.
+        //  - single file  -> stored without a version suffix
+        //  - multiple files -> v1, v2, v3 ... continuing from the persisted Redis counter
+        // Files are stored here (deferred from per-file), the counter is persisted, and the offset is
+        // advanced to the last stored file only after all files in the stream are stored successfully.
+        long lastStoredSeq = FileVersionFinalizer.finalizeStream(collected, destination);
+        if (lastStoredSeq >= 0) {
+            saveNextOffsetToRedis(topic, lastStoredSeq);
+            log.info(
+                    "Finalized {} file(s) for topic '{}'. Saved next sequence id {} to Redis.",
+                    collected.size(),
+                    topic,
+                    lastStoredSeq + 1);
+        } else {
+            log.info(
+                    "No files stored for topic '{}' (empty stream or upload failure); offset not advanced.", topic);
+        }
+        log.info("Finished processing stream for topic '{}'", topic);
     }
 
     /**
@@ -153,77 +174,61 @@ public class GRPCFileClient extends GRPCAbstractClient {
      * @param topic topic name for logging
      * @param event the stream event to handle
      * @param assembler file chunk assembler for file reconstruction
-     * @param currentSeq current sequence id
-     * @return updated sequence id after processing
+     * @param collected accumulator of completed files for this stream
      */
-    private long handleStreamEvent(String topic, FileStreamEvent event, FileChunkAssembler assembler, long currentSeq) {
-        return switch (event.getEventCase()) {
-            case CHUNK -> handleChunkEvent(topic, event.getChunk(), assembler, currentSeq);
-            case WARNING -> handleWarningEvent(topic, event.getWarning(), currentSeq);
-            case EVENT_NOT_SET -> {
-                log.warn("Received FileStreamEvent with no payload for topic '{}'", topic);
-                yield currentSeq;
-            }
-        };
-    }
-
-    /**
-     * Processes a file chunk, assembles the file, and updates Redis offset on completion.
-     *
-     * @param topic topic name for logging
-     * @param chunk the file chunk to process
-     * @param assembler file chunk assembler for file reconstruction
-     * @param currentSeq current sequence id
-     * @return updated sequence id after processing
-     */
-    private long handleChunkEvent(String topic, FileChunk chunk, FileChunkAssembler assembler, long currentSeq) {
-        // If chunk includes FileChecksum, FileChunkAssembler already performs the same checksum/size
-        // checks on the last chunk (no behaviour change needed here).
-        Path completed = assembler.accept(chunk);
-
-        if (completed != null) {
-            long seqId = chunk.getFileSequenceId();
-            saveNextOffsetToRedis(topic, seqId);
-            log.info(
-                    "Completed file '{}' stored at {}. Saved next sequence id {} to Redis.",
-                    chunk.getFileName(),
-                    completed,
-                    seqId + 1);
-            return seqId;
+    private void handleStreamEvent(
+            String topic,
+            FileStreamEvent event,
+            FileChunkAssembler assembler,
+            List<FileVersionPlanner.CollectedFile> collected) {
+        switch (event.getEventCase()) {
+            case CHUNK -> handleChunkEvent(topic, event.getChunk(), assembler, collected);
+            case WARNING -> handleWarningEvent(topic, event.getWarning());
+            case EVENT_NOT_SET -> log.warn("Received FileStreamEvent with no payload for topic '{}'", topic);
         }
-
-        return currentSeq;
     }
 
     /**
-     * Handles a stream warning event by logging and updating Redis offset.
+     * Assembles a file chunk to staging and, on completion, collects its descriptor for end-of-stream
+     * versioning. Storage and offset advancement are deferred to finalization.
+     *
+     * @param topic     topic name for logging
+     * @param chunk     the file chunk to process
+     * @param assembler file chunk assembler for file reconstruction
+     * @param collected accumulator of completed files for this stream
+     */
+    private void handleChunkEvent(
+            String topic,
+            FileChunk chunk,
+            FileChunkAssembler assembler,
+            List<FileVersionPlanner.CollectedFile> collected) {
+        // Assemble to staging; storage + offset advancement are deferred to end-of-stream finalization,
+        // so the single-vs-multiple versioning decision can be made over the whole collected list.
+        FileVersionPlanner.CollectedFile staged = assembler.acceptToStaging(chunk);
+        if (staged != null) {
+            collected.add(staged);
+            log.info(
+                    "Collected file '{}' (seq {}) for topic '{}'; awaiting end-of-stream versioning",
+                    chunk.getFileName(),
+                    chunk.getFileSequenceId(),
+                    topic);
+        }
+    }
+
+    /**
+     * Handles a stream warning event by recording the skipped sequence id and logging it.
      *
      * @param topic topic name for logging
      * @param warning the warning event
-     * @param currentSeq current sequence id
-     * @return unchanged sequence id (warnings don't advance the sequence)
      */
-    private long handleWarningEvent(String topic, StreamWarning warning, long currentSeq) {
-        // Log as warning and increment Redis counter so upstream retry logic can stop looping forever
-//        log.warn(
-//                "Received stream warning for topic '{}': reason='{}', details='{}', skippedSequenceId={}",
-//                topic,
-//                warning.getReason(),
-//                warning.getDetails(),
-//                warning.getSkippedSequenceId());
-
+    private void handleWarningEvent(String topic, StreamWarning warning) {
         saveNextOffsetToRedis(topic, warning.getSkippedSequenceId());
         log.warn(ChecksumValidationReporter.fileSkipped(
                 warning.getSkippedSequenceId(),
                 warning.getReason(),
                 warning.getDetails()));
-
-//        log.warn("Incremented stream warning counter for topic '{}' to {}", topic, warning.getSkippedSequenceId() + 1);
-
-        // NOTE: we deliberately do NOT advance the offset here, because warning implies server skipped
-        // a sequence id for a reason (e.g., deserialization/validation). Offset advancement behaviour
-        // should remain controlled by the existing completion/offset logic.
-        return currentSeq;
+        // Behaviour preserved from the per-file implementation: a warning records the skipped sequence id
+        // so upstream retry logic does not loop forever.
     }
 
     /**
