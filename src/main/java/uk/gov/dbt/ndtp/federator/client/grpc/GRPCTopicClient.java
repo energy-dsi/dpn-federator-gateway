@@ -64,6 +64,12 @@ import uk.gov.dbt.ndtp.federator.common.utils.SecurityLabelUtil;
 import uk.gov.dbt.ndtp.federator.common.utils.ObjectMapperUtil;
 import java.util.Map;
 import java.util.Objects;
+import io.grpc.Status.Code.*;
+
+import static io.grpc.Status.*;
+import static io.grpc.Status.Code.UNAVAILABLE;
+import static io.grpc.Status.DEADLINE_EXCEEDED;
+
 
 /**
  * GRPCTopicClient is a client for the FederatorService GRPC service.
@@ -82,6 +88,9 @@ public class GRPCTopicClient extends GRPCAbstractClient {
     private static final String CLIENT_IDLE_TIMEOUT = "client.idleTimeout.secs";
 
     private final ChecksumMismatchAction mismatchAction; // NEW
+    private static final String PLAYBOOK_URL =
+            "https://github.com/energy-dsi/dpn-integration-playbook";
+
 
     public GRPCTopicClient(ConnectionProperties connectionProperties, String topicPrefix) {
         this(
@@ -173,16 +182,56 @@ public class GRPCTopicClient extends GRPCAbstractClient {
                         .equals(exception.getStatus().getCode())) {
                     LOGGER.error("Topic ({}) no longer valid for client ({})", topic, client);
                 } else {
-                    LOGGER.error("Topic processing stopped due to unknown error.", exception);
+                    logConnectionFailureGuidance(exception);
                 }
                 throw exception;
             }
         } catch (KafkaException e) {
             throw new RetryableException(e);
         }
+
+    }
+    /**
+     * Logs a connection/RPC failure with actionable guidance describing the likely cause
+     * and next steps, plus a link to the DPN integration playbook for further troubleshooting.
+     *
+     * @param exception the gRPC failure that occurred while talking to the federator server
+     */
+
+    public String logConnectionFailureGuidance(StatusRuntimeException exception) {
+
+        String guidance = switch (exception.getStatus().getCode()) {
+
+            case UNAVAILABLE -> "Server is unreachable. Check that the host and port are correct "
+
+                    + "and the federator server is running. Verify network connectivity and firewall rules.";
+
+            case UNAUTHENTICATED -> "Authentication failed. Check that the IDP token service is "
+
+                    + "reachable, the client ID and secret are correct, and the token has not expired.";
+
+            case PERMISSION_DENIED -> "Authorisation denied. Check that this consumer is registered "
+
+                    + "in the management node and has been granted access to the target producer.";
+
+            case DEADLINE_EXCEEDED -> "Connection timed out. The server may be overloaded or the "
+
+                    + "network is slow. Check server health and consider increasing the connection timeout.";
+
+            default -> "An unexpected error occurred while connecting to the federator server.";
+
+        };
+
+        LOGGER.error(
+
+                "Topic processing stopped due to connection error. status={}, cause={}. {} "
+                        + "See the DPN integration playbook for troubleshooting steps: {}",
+                exception.getStatus().getCode(), exception.getMessage(), guidance, PLAYBOOK_URL);
+
+        return guidance;
     }
 
-    public void consumeMessagesAndSendOn(TopicRequest req, KafkaSink<Bytes, Bytes> sink) {
+        public void consumeMessagesAndSendOn(TopicRequest req, KafkaSink<Bytes, Bytes> sink) {
         LOGGER.info("Consuming messages for topic: {}", req.getTopic());
 
         long idleSeconds = PropertyUtil.getPropertyIntValue(CLIENT_IDLE_TIMEOUT, TEN);
@@ -354,6 +403,7 @@ public class GRPCTopicClient extends GRPCAbstractClient {
         }
     }
 
+
     /***
      * Gets the next batch from the future, with a timeout to avoid blocking indefinitely.
      * @param futureNext The future to get the next batch from.
@@ -390,9 +440,34 @@ public class GRPCTopicClient extends GRPCAbstractClient {
         }
     }
 
+    /**
+
+     * Tests connectivity to the federator server without consuming any data.
+
+     * On failure, logs actionable guidance describing the likely cause and a link to the
+
+     * DPN integration playbook, then rethrows so the caller can surface a clear pass/fail result.
+
+     */
+
     public void testConnectivity() {
-        // getStub().testConnectivity(TopicRequest.getDefaultInstance());
+
+        try {
+
+            getStub().withDeadlineAfter(5, TimeUnit.SECONDS)
+
+                    .getKafkaConsumer(TopicRequest.getDefaultInstance());
+
+        } catch (StatusRuntimeException exception) {
+
+            logConnectionFailureGuidance(exception);
+
+            throw exception;
+
+        }
+
     }
+
 
     // NEW — resolves checksum.on.mismatch from client.properties
     // Defaults to SKIP if the property is missing or unrecognised.
@@ -407,3 +482,5 @@ public class GRPCTopicClient extends GRPCAbstractClient {
         }
     }
 }
+
+
