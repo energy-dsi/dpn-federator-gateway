@@ -28,12 +28,8 @@ package uk.gov.dbt.ndtp.federator.server.grpc;
 
 import static uk.gov.dbt.ndtp.federator.common.utils.GRPCUtils.*;
 
-import io.grpc.Grpc;
-import io.grpc.Server;
-import io.grpc.ServerBuilder;
-import io.grpc.ServerCredentials;
-import io.grpc.ServerInterceptors;
-import io.grpc.TlsServerCredentials;
+import io.grpc.*;
+
 import java.io.IOException;
 import java.util.Properties;
 import java.util.Set;
@@ -45,10 +41,13 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import uk.gov.dbt.ndtp.federator.common.annotations.ExcludeFromJacocoGeneratedReport;
 import uk.gov.dbt.ndtp.federator.common.service.idp.IdpTokenService;
+import uk.gov.dbt.ndtp.federator.common.service.ocsp.OcspCertificateVerificationService;
+import uk.gov.dbt.ndtp.federator.common.service.ocsp.OcspCertificateVerificationServiceImpl;
 import uk.gov.dbt.ndtp.federator.common.utils.GRPCUtils;
 import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
 import uk.gov.dbt.ndtp.federator.common.utils.SSLUtils;
 import uk.gov.dbt.ndtp.federator.common.utils.ThreadUtil;
+import uk.gov.dbt.ndtp.federator.server.OcspServerInterceptor;
 import uk.gov.dbt.ndtp.federator.server.grpc.interceptor.AuthServerInterceptor;
 import uk.gov.dbt.ndtp.federator.server.grpc.interceptor.ConsumerVerificationServerInterceptor;
 import uk.gov.dbt.ndtp.federator.server.grpc.interceptor.CustomServerInterceptor;
@@ -110,14 +109,46 @@ public class GRPCServer implements AutoCloseable {
     private ServerBuilder<?> configureServerBuilder(ServerBuilder<?> builder, Set<String> sharedHeaders) {
         IdpTokenService tokenService = GRPCUtils.createIdpTokenService();
         Properties commonProperties = PropertyUtil.getPropertiesFromFilePath(COMMON_CONFIG_PROPERTIES);
+
+        //Since the server properties are already loaded via PropertyUtil.init() at startup,
+        // reading individual values directly.
+        //Replace this in GRPCServer.configureServerBuilder():
+        commonProperties.setProperty("idp.client.id","management-node");
+        commonProperties.setProperty("idp.client.secret","OXhz7wsXnLtINuamWJySEcVVN4zhSAdQ");
+        Properties serverProps = new Properties();
+        serverProps.setProperty("idp.client.id","management-node");
+        serverProps.setProperty("idp.client.secret","OXhz7wsXnLtINuamWJySEcVVN4zhSAdQ");
+//        serverProps.setProperty("client.p12FilePath",
+//                PropertyUtil.getPropertyValue("client.p12FilePath"));
+//        serverProps.setProperty("client.p12Password",
+//                PropertyUtil.getPropertyValue("client.p12Password"));
+        serverProps.setProperty("client.truststoreFilePath",
+                PropertyUtil.getPropertyValue("server.truststoreFilePath"));
+        serverProps.setProperty("client.truststorePassword",
+                PropertyUtil.getPropertyValue("server.truststorePassword"));
+        serverProps.setProperty("management.node.base.url",
+                PropertyUtil.getPropertyValue("management.node.base.url"));
+        serverProps.setProperty("ocsp.cache.ttl.seconds",
+                PropertyUtil.getPropertyValue("ocsp.cache.ttl.seconds", "300"));
+
+        IdpTokenService idpTokenService = GRPCUtils.createIdpTokenService();
+
+        OcspCertificateVerificationService ocspService =
+                new OcspCertificateVerificationServiceImpl(serverProps, commonProperties, idpTokenService);
+        LOGGER.info("**************configureServerBuilder() ****************** ");
+//soma
+        ServerServiceDefinition serviceDef = new GRPCFederatorService(sharedHeaders).bindService();
         return builder.executor(ThreadUtil.threadExecutor(GRPC_SERVER))
                 .keepAliveTime(PropertyUtil.getPropertyIntValue(SERVER_KEEP_ALIVE_TIME, FIVE), TimeUnit.SECONDS)
                 .keepAliveTimeout(PropertyUtil.getPropertyIntValue(SERVER_KEEP_ALIVE_TIMEOUT, ONE), TimeUnit.SECONDS)
                 .addService(ServerInterceptors.intercept(
-                        new GRPCFederatorService(sharedHeaders),
-                        new ConsumerVerificationServerInterceptor(tokenService, commonProperties),
-                        new AuthServerInterceptor(tokenService),
-                        new CustomServerInterceptor()));
+                        serviceDef,
+                        (ServerInterceptor) new ConsumerVerificationServerInterceptor(tokenService, commonProperties),
+                        (ServerInterceptor) new AuthServerInterceptor(tokenService),
+                        (ServerInterceptor) new CustomServerInterceptor(),
+                        (ServerInterceptor) new OcspServerInterceptor(tokenService,ocspService)));
+
+
     }
 
     @SneakyThrows

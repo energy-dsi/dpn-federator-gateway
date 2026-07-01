@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import uk.gov.dbt.ndtp.federator.common.service.idp.IdpTokenService;
+import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
 import uk.gov.dbt.ndtp.federator.common.utils.SSLUtils;
 import uk.gov.dbt.ndtp.federator.exceptions.OcspVerificationException;
 
@@ -28,7 +29,7 @@ public class OcspCertificateVerificationServiceImpl
 
 
 
-    private final String p12Password;      // from property: client.ssl.key-store-password
+    //private final String p12Password;      // from property: client.ssl.key-store-password
     private final String managementNodeBaseUrl;
     private final HttpClient httpClient;
     private final OtelCertificateVerificationLogger otelLogger;
@@ -38,7 +39,7 @@ public class OcspCertificateVerificationServiceImpl
     public OcspCertificateVerificationServiceImpl(
             Properties clientProps, Properties commonProps, IdpTokenService idpTokenService) {
         this.clientProps = clientProps;
-        this.p12Password     = clientProps.getProperty("client.p12Password");
+        //this.p12Password     = clientProps.getProperty("client.p12Password");
 
 
         this.managementNodeBaseUrl = clientProps.getProperty("management.node.base.url");
@@ -65,9 +66,10 @@ public class OcspCertificateVerificationServiceImpl
         try {
 
             status = checkCertificateStatus(producerIdpClientId);
+            log.info("**************checkCertificateStatus() returned ******************       status={}", status);
 
         } catch (Exception e) {
-
+            log.error("OCSP check failed for clientId={}: {}", producerIdpClientId, e.getMessage(), e);
             otelLogger.log(producerIdpClientId, timestamp, OcspStatus.NOT_FOUND);
         }
 
@@ -84,9 +86,10 @@ public class OcspCertificateVerificationServiceImpl
         String url = managementNodeBaseUrl +
 
                 "/api/v1/certificate/ocsp?clientId=" + clientId ;
+        log.info("idp.client.id from clientProps = {}", clientProps.getProperty("idp.client.id"));
 
         String token = idpTokenService.fetchToken();
-
+        log.info("**************idpTokenService.fetchToken() returned ******************       token");
         HttpRequest request = HttpRequest.newBuilder()
 
                 .uri(URI.create(url))
@@ -102,7 +105,7 @@ public class OcspCertificateVerificationServiceImpl
         HttpResponse<String> response =
 
                 httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-
+        log.info("**************response returned ******************       ");
         if (response.statusCode() != 200) {
 
             throw new OcspVerificationException(
@@ -136,7 +139,7 @@ public class OcspCertificateVerificationServiceImpl
     private X509Certificate loadClientCertificate() {
         try (InputStream is = new FileInputStream(clientProps.getProperty("client.p12FilePath"))) {
             KeyStore ks = KeyStore.getInstance("PKCS12");
-            ks.load(is, p12Password.toCharArray());
+            //ks.load(is, p12Password.toCharArray());
             // Get first certificate entry from the keystore
             Enumeration<String> aliases = ks.aliases();
             while (aliases.hasMoreElements()) {
