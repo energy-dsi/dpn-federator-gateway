@@ -137,9 +137,16 @@ class GRPCTopicClientTest {
     void testConnectivity_coverage() {
         ManagedChannel channel = mock(ManagedChannel.class);
         when(channel.shutdown()).thenReturn(channel);
+        // Make the channel produce a ClientCall that fails fast, instead of null:
+        when(channel.newCall(any(), any()))
+                .thenThrow(new StatusRuntimeException(Status.UNAVAILABLE));
 
         GRPCTopicClient client = new GRPCTopicClient("c", "k", "s", "p", channel);
-        client.testConnectivity();
+
+        // testConnectivity() logs connection failure guidance and then rethrows the
+        // StatusRuntimeException so the caller gets a clear pass/fail result.
+        assertThrows(StatusRuntimeException.class, () -> client.testConnectivity());
+
         client.close();
     }
 
