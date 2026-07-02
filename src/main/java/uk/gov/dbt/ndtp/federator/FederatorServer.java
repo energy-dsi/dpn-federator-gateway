@@ -92,23 +92,20 @@ public class FederatorServer {
      * @throws IOException if initialization fails
      */
     public static void main(final String[] args) {
-        // DSI EDIT: must run before any logging happens, so OpenTelemetryAppender is wired up
-        // and even the earliest log lines pick up trace context / get exported.
-        uk.gov.dbt.ndtp.federator.common.telemetry.OpenTelemetryConfig.initialize();
-
-        // DSI EDIT (heartbeat): periodic health/heartbeat log (default 15 min; override with
-        // HEARTBEAT_INTERVAL_SECONDS). Runs outside any span, so no trace_id/span_id.
-        uk.gov.dbt.ndtp.federator.common.telemetry.HeartbeatService.start(
-                "federator-server",
-                java.time.Duration.ofSeconds(Long.parseLong(
-                        System.getenv().getOrDefault("HEARTBEAT_INTERVAL_SECONDS", "900"))));
+        // TELEMETRY COMMENTED OUT - OTel SDK init and heartbeat disabled.
+        // uk.gov.dbt.ndtp.federator.common.telemetry.OpenTelemetryConfig.initialize();
+        //
+        // uk.gov.dbt.ndtp.federator.common.telemetry.HeartbeatService.start(
+        //         "federator-server",
+        //         java.time.Duration.ofSeconds(Long.parseLong(
+        //                 System.getenv().getOrDefault("HEARTBEAT_INTERVAL_SECONDS", "900"))));
 
         // Initialize properties if not already done
         if (!PropertyUtil.initializeProperties()) {
-            // DSI EDIT: this is a fatal startup failure - federator-server cannot run at all
-            // without its properties - logged at CRITICAL/FATAL severity (severity_number 21).
-            uk.gov.dbt.ndtp.federator.common.telemetry.CriticalLogUtil.logCritical(
-                    LOGGER, "Failed to initialize properties. federator-server cannot start. Exiting.");
+            // TELEMETRY COMMENTED OUT - CriticalLogUtil replaced with plain LOGGER.error.
+            // uk.gov.dbt.ndtp.federator.common.telemetry.CriticalLogUtil.logCritical(
+            //         LOGGER, "Failed to initialize properties. federator-server cannot start. Exiting.");
+            LOGGER.error("Failed to initialize properties. federator-server cannot start. Exiting.");
             System.exit(1);
         }
 

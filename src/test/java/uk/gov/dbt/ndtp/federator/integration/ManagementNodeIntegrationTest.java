@@ -201,14 +201,15 @@ class ManagementNodeIntegrationTest {
         // in production this singleton is set once via initialize() at process startup, but
         // this integration test never calls that, so the static call must be mocked here to
         // avoid "OpenTelemetryConfig.initialize() must be called before OpenTelemetryConfig.get()".
-        try (org.mockito.MockedStatic<uk.gov.dbt.ndtp.federator.common.telemetry.OpenTelemetryConfig> otelMock =
-                org.mockito.Mockito.mockStatic(
-                        uk.gov.dbt.ndtp.federator.common.telemetry.OpenTelemetryConfig.class)) {
-            otelMock.when(uk.gov.dbt.ndtp.federator.common.telemetry.OpenTelemetryConfig::get)
-                    .thenReturn(io.opentelemetry.api.OpenTelemetry.noop());
-
-            job.run(createJobParams());
-        }
+        // TELEMETRY COMMENTED OUT - OpenTelemetryConfig mock removed; job.run() no longer
+        // requires an initialised OpenTelemetry SDK.
+        // try (org.mockito.MockedStatic<uk.gov.dbt.ndtp.federator.common.telemetry.OpenTelemetryConfig> otelMock =
+        //         org.mockito.Mockito.mockStatic(
+        //                 uk.gov.dbt.ndtp.federator.common.telemetry.OpenTelemetryConfig.class)) {
+        //     otelMock.when(uk.gov.dbt.ndtp.federator.common.telemetry.OpenTelemetryConfig::get)
+        //             .thenReturn(io.opentelemetry.api.OpenTelemetry.noop());
+        job.run(createJobParams());
+        // }
         latch.countDown();
 
         assertTrue(latch.await(TIMEOUT, TimeUnit.SECONDS));

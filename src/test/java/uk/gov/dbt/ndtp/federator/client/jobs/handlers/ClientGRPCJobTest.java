@@ -4,7 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.*;
 
-import io.opentelemetry.api.OpenTelemetry;
+// import io.opentelemetry.api.OpenTelemetry; // TELEMETRY COMMENTED OUT
 import java.util.function.BiFunction;
 import java.util.function.Supplier;
 import java.util.function.ToLongBiFunction;
@@ -14,7 +14,7 @@ import org.mockito.Mockito;
 import uk.gov.dbt.ndtp.federator.WrappedGRPCClient;
 import uk.gov.dbt.ndtp.federator.client.connection.ConnectionProperties;
 import uk.gov.dbt.ndtp.federator.client.jobs.params.ClientGRPCJobParams;
-import uk.gov.dbt.ndtp.federator.common.telemetry.OpenTelemetryConfig;
+// import uk.gov.dbt.ndtp.federator.common.telemetry.OpenTelemetryConfig; // TELEMETRY COMMENTED OUT
 import uk.gov.dbt.ndtp.federator.exceptions.ClientGRPCJobException;
 
 class ClientGRPCJobTest {
@@ -45,11 +45,8 @@ class ClientGRPCJobTest {
         // in production this singleton is set once via initialize() at process startup,
         // but unit tests never call that, so the static call must be mocked here to avoid
         // "OpenTelemetryConfig.initialize() must be called before OpenTelemetryConfig.get()".
-        try (MockedStatic<OpenTelemetryConfig> otelMock = Mockito.mockStatic(OpenTelemetryConfig.class)) {
-            otelMock.when(OpenTelemetryConfig::get).thenReturn(OpenTelemetry.noop());
-
+            // TELEMETRY COMMENTED OUT - OpenTelemetryConfig mock removed
             assertDoesNotThrow(() -> job.run(params));
-        }
 
         // Assert
         verify(clientFactory, times(1)).apply(cp, "pref");
@@ -81,11 +78,8 @@ class ClientGRPCJobTest {
         ClientGRPCJobParams params = new ClientGRPCJobParams("t", cp, "nodeX");
 
         // Act
-        try (MockedStatic<OpenTelemetryConfig> otelMock = Mockito.mockStatic(OpenTelemetryConfig.class)) {
-            otelMock.when(OpenTelemetryConfig::get).thenReturn(OpenTelemetry.noop());
-
+            // TELEMETRY COMMENTED OUT - OpenTelemetryConfig mock removed
             assertDoesNotThrow(() -> job.run(params));
-        }
 
         // Assert
         verify(clientFactory).apply(cp, "");
@@ -115,11 +109,8 @@ class ClientGRPCJobTest {
         ClientGRPCJobParams params = new ClientGRPCJobParams("topic-x", cp, "nodeZ");
 
         // Act + Assert
-        try (MockedStatic<OpenTelemetryConfig> otelMock = Mockito.mockStatic(OpenTelemetryConfig.class)) {
-            otelMock.when(OpenTelemetryConfig::get).thenReturn(OpenTelemetry.noop());
-
+            // TELEMETRY COMMENTED OUT - OpenTelemetryConfig mock removed
             assertThrows(ClientGRPCJobException.class, () -> job.run(params));
-        }
 
         // Verify upstream interactions attempted before failure
         verify(clientFactory).apply(cp, "pref");

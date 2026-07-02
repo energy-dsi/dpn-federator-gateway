@@ -114,16 +114,13 @@ public class FederatorClient {
      * @param args command line arguments
      */
     public static void main(final String[] args) {
-        // DSI EDIT: must run before any logging happens, so OpenTelemetryAppender is wired up
-        // and even the earliest log lines pick up trace context / get exported.
-        uk.gov.dbt.ndtp.federator.common.telemetry.OpenTelemetryConfig.initialize();
-
-        // DSI EDIT (heartbeat): periodic health/heartbeat log (default 15 min; override with
-        // HEARTBEAT_INTERVAL_SECONDS). Runs outside any span, so no trace_id/span_id.
-        uk.gov.dbt.ndtp.federator.common.telemetry.HeartbeatService.start(
-                "federator-client",
-                java.time.Duration.ofSeconds(Long.parseLong(
-                        System.getenv().getOrDefault("HEARTBEAT_INTERVAL_SECONDS", "60"))));
+        // TELEMETRY COMMENTED OUT - OTel SDK init and heartbeat disabled.
+        // uk.gov.dbt.ndtp.federator.common.telemetry.OpenTelemetryConfig.initialize();
+        //
+        // uk.gov.dbt.ndtp.federator.common.telemetry.HeartbeatService.start(
+        //         "federator-client",
+        //         java.time.Duration.ofSeconds(Long.parseLong(
+        //                 System.getenv().getOrDefault("HEARTBEAT_INTERVAL_SECONDS", "60"))));
 
         LOGGER.info(LOG_INIT);
         initProperties();
@@ -224,11 +221,10 @@ public class FederatorClient {
         } catch (ConfigurationException e) {
             handleError(e);
         } catch (Exception e) {
-            // DSI EDIT: this is the top-level catch that leads to the client process exiting -
-            // logged at CRITICAL/FATAL severity (severity_number 21), since federator-client is
-            // going down as a result.
-            uk.gov.dbt.ndtp.federator.common.telemetry.CriticalLogUtil.logCritical(
-                    LOGGER, "Unexpected error - federator-client is shutting down: " + e.getMessage(), e);
+            // TELEMETRY COMMENTED OUT - CriticalLogUtil replaced with plain LOGGER.error.
+            // uk.gov.dbt.ndtp.federator.common.telemetry.CriticalLogUtil.logCritical(
+            //         LOGGER, "Unexpected error - federator-client is shutting down: " + e.getMessage(), e);
+            LOGGER.error("Unexpected error - federator-client is shutting down: {}", e.getMessage(), e);
             exitHandler.exit(EXIT_ERROR);
         }
     }

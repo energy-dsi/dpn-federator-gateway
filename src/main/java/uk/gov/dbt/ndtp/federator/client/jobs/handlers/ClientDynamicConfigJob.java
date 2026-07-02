@@ -3,10 +3,10 @@
 // and maintained by the National Digital Twin Programme.
 package uk.gov.dbt.ndtp.federator.client.jobs.handlers;
 
-import io.opentelemetry.api.trace.Span;
-import io.opentelemetry.api.trace.StatusCode;
-import io.opentelemetry.api.trace.Tracer;
-import io.opentelemetry.context.Scope;
+// import io.opentelemetry.api.trace.Span;
+// import io.opentelemetry.api.trace.StatusCode;
+// import io.opentelemetry.api.trace.Tracer;
+// import io.opentelemetry.context.Scope;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -30,7 +30,7 @@ import uk.gov.dbt.ndtp.federator.common.model.dto.ProductConsumerDTO;
 import uk.gov.dbt.ndtp.federator.common.model.dto.ProductDTO;
 import uk.gov.dbt.ndtp.federator.common.service.config.ConsumerConfigService;
 import uk.gov.dbt.ndtp.federator.common.service.ocsp.OcspCertificateVerificationService;
-import uk.gov.dbt.ndtp.federator.common.telemetry.OpenTelemetryConfig;
+// import uk.gov.dbt.ndtp.federator.common.telemetry.OpenTelemetryConfig;
 import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
 
 /**
@@ -123,11 +123,12 @@ public class ClientDynamicConfigJob implements Job {
         // control flow, the early return, or either catch block. Job creation/scheduling logic
         // in updateDynamicConfigJob()/reloadJobs() (and the file/topic streaming jobs they
         // create) is completely untouched.
-        Tracer tracer = OpenTelemetryConfig.get().getTracer("uk.gov.dbt.ndtp.federator.client.jobs");
-        Span span = tracer.spanBuilder("ClientDynamicConfigJob.run")
-                .setAttribute("dpn.node_id", nodeId)
-                .startSpan();
-        try (Scope scope = span.makeCurrent()) {
+        // TELEMETRY COMMENTED OUT - tracing span removed, config-refresh logic preserved.
+        // Tracer tracer = OpenTelemetryConfig.get().getTracer("uk.gov.dbt.ndtp.federator.client.jobs");
+        // Span span = tracer.spanBuilder("ClientDynamicConfigJob.run")
+        //         .setAttribute("dpn.node_id", nodeId)
+        //         .startSpan();
+        try {
             final ConsumerConfigDTO config = configService.getConsumerConfiguration();
             if (config == null) {
                 log.warn(LOG_NO_CONFIG, nodeId);
@@ -136,16 +137,14 @@ public class ClientDynamicConfigJob implements Job {
             updateDynamicConfigJob();
             reloadJobs(config, nodeId);
         } catch (ManagementNodeDataException e) {
-            span.recordException(e);
-            span.setStatus(StatusCode.ERROR, e.getMessage());
+            // span.recordException(e);
+            // span.setStatus(StatusCode.ERROR, e.getMessage());
             log.error(LOG_ERROR, nodeId, e.getMessage(), e);
         } catch (Exception e) {
-            span.recordException(e);
-            span.setStatus(StatusCode.ERROR, e.getMessage());
+            // span.recordException(e);
+            // span.setStatus(StatusCode.ERROR, e.getMessage());
             log.error(LOG_ERROR_UNEXP, nodeId, e.getMessage(), e);
-        } finally {
-            span.end();
-        }
+        } // finally { span.end(); }
     }
 
     private void reloadJobs(final ConsumerConfigDTO config, final String nodeId) {

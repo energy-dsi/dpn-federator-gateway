@@ -32,14 +32,14 @@ import io.grpc.ChannelCredentials;
 import io.grpc.Grpc;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
-import io.opentelemetry.instrumentation.grpc.v1_6.GrpcTelemetry;
+// import io.opentelemetry.instrumentation.grpc.v1_6.GrpcTelemetry;
 import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import uk.gov.dbt.ndtp.federator.client.grpc.interceptor.AuthClientInterceptor;
 import uk.gov.dbt.ndtp.federator.client.grpc.interceptor.CustomClientInterceptor;
 import uk.gov.dbt.ndtp.federator.common.service.idp.IdpTokenService;
-import uk.gov.dbt.ndtp.federator.common.telemetry.OpenTelemetryConfig;
+// import uk.gov.dbt.ndtp.federator.common.telemetry.OpenTelemetryConfig;
 import uk.gov.dbt.ndtp.federator.common.utils.GRPCUtils;
 import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
 
