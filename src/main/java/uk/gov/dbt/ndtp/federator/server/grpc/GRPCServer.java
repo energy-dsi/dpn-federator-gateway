@@ -134,9 +134,8 @@ public class GRPCServer implements AutoCloseable {
         IdpTokenService idpTokenService = GRPCUtils.createIdpTokenService();
 
         OcspCertificateVerificationService ocspService =
-                new OcspCertificateVerificationServiceImpl(serverProps, commonProperties, idpTokenService);
-        LOGGER.info("**************configureServerBuilder() ****************** ");
-//soma
+                new OcspCertificateVerificationServiceImpl(serverProps, idpTokenService);
+
         ServerServiceDefinition serviceDef = new GRPCFederatorService(sharedHeaders).bindService();
         return builder.executor(ThreadUtil.threadExecutor(GRPC_SERVER))
                 .keepAliveTime(PropertyUtil.getPropertyIntValue(SERVER_KEEP_ALIVE_TIME, FIVE), TimeUnit.SECONDS)

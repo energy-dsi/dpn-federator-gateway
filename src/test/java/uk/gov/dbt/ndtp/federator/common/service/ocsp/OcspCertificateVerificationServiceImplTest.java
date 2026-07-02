@@ -66,9 +66,7 @@ class OcspCertificateVerificationServiceImplTest {
         clientProps.setProperty("client.truststorePassword", TEST_TRUSTSTORE_PASSWORD);
         clientProps.setProperty("management.node.base.url", BASE_URL);
 
-        Properties commonProps = new Properties();
-
-        service = new OcspCertificateVerificationServiceImpl(clientProps, commonProps, idpTokenService);
+        service = new OcspCertificateVerificationServiceImpl(clientProps, idpTokenService);
 
         // Replace the internally-constructed real HttpClient with a mock so checkCertificateStatus()
         // can be tested without a real network call. There is no constructor/setter seam for this

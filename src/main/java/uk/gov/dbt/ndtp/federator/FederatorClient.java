@@ -281,9 +281,9 @@ public class FederatorClient {
                 PropertyUtil.getPropertyValue("management.node.base.url"));
         clientProps.setProperty("ocsp.cache.ttl.seconds",
                 PropertyUtil.getPropertyValue("ocsp.cache.ttl.seconds", "300"));
-        Properties commonProps = PropertyUtil.getPropertiesFromFilePath(COMMON_CONFIG);
+
 
         IdpTokenService idpTokenService = GRPCUtils.createIdpTokenService();
-        return new OcspCertificateVerificationServiceImpl(clientProps, commonProps, idpTokenService);
+        return new OcspCertificateVerificationServiceImpl(clientProps, idpTokenService);
     }
 }
