@@ -8,6 +8,7 @@ import uk.gov.dbt.ndtp.federator.client.grpc.GRPCTopicClient;
 import uk.gov.dbt.ndtp.federator.client.jobs.Job;
 import uk.gov.dbt.ndtp.federator.client.jobs.params.ClientGRPCJobParams;
 import uk.gov.dbt.ndtp.federator.client.jobs.params.JobParams;
+// import uk.gov.dbt.ndtp.federator.common.telemetry.OpenTelemetryConfig;
 import uk.gov.dbt.ndtp.federator.common.service.ocsp.OcspCertificateVerificationService;
 import uk.gov.dbt.ndtp.federator.common.service.ocsp.OcspStatus;
 import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
@@ -41,7 +42,6 @@ public class ClientGRPCJob implements Job {
     @Setter
     private static String producerIdpClientId;
 
-
     /** Default constructor wires real implementations for backward compatibility. */
     public ClientGRPCJob() {
         this.prefixSupplier = () -> PropertyUtil.getPropertyValue(FEDERATOR_CLIENT_TARGET_TOPIC, "");
@@ -71,6 +71,21 @@ public class ClientGRPCJob implements Job {
         }
 
         ConnectionProperties connectionProperties = request.getConnectionProperties();
+
+        // DSI EDIT: one manual span per job execution. The underlying gRPC call (instrumented
+        // by GrpcTelemetry) becomes a CHILD span of this one - still one trace per job/call,
+        // but now every log line in this method (producer setup, the RPC itself, error
+        // handling, producer teardown) shares the same trace_id, not just the literal network
+        // call. Without this, OpenTelemetryAppender has nothing to stamp onto log lines that
+        // happen just before/after the RPC, even though they're part of the same logical
+        // operation.
+        // TELEMETRY COMMENTED OUT - tracing span removed, GRPC processing logic preserved.
+        // Tracer tracer = OpenTelemetryConfig.get().getTracer("uk.gov.dbt.ndtp.federator.client.jobs");
+        // Span jobSpan = tracer.spanBuilder("ClientGRPCJob.run")
+        //         .setAttribute("dpn.topic", request.getTopic())
+        //         .setAttribute("dpn.target_host", connectionProperties.serverHost())
+        //         .startSpan();
+
         log.info(
                 "Calling GRPC endpoint of producer:{} , Topic {}",
                 connectionProperties.serverHost(),

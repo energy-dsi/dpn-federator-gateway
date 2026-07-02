@@ -32,6 +32,7 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.InputStream;
 import java.net.URISyntaxException;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Map;
 import java.util.Properties;
@@ -239,6 +240,30 @@ public class PropertyUtil {
             throw new PropertyUtilException(e);
         }
     }
+    /**
+     * Absolute destination → used as-is. Relative destination (a bare convention name like
+     * jsonschema-org-product.nt) → resolved against the local root so files land in the
+     * federator-files folder, not the client's working directory.
+     * Root order: client.files.local.dir → client.files.temp.dir → ${java.io.tmpdir}/federator-files.
+     */
+    public static Path resolveTarget(String destination) {
+        Path dest = Path.of(destination);
+        if (dest.isAbsolute()) {
+            return dest.normalize();
+        }
+        return localRoot().resolve(dest).toAbsolutePath().normalize();
+    }
+
+    private static Path localRoot() {
+        String dir = safeProp("client.files.local.dir");
+        if (dir.isBlank()) {
+            dir = safeProp("client.files.temp.dir");
+        }
+        if (!dir.isBlank()) {
+            return Path.of(dir);
+        }
+        return Path.of(System.getProperty("java.io.tmpdir"), "federator-files");
+    }
 
     /**
      * Loads a properties file specified by the property key. The value of the property can be either an absolute
@@ -424,6 +449,16 @@ public class PropertyUtil {
         }
     }
 
+
+    private static String safeProp(String key) {
+        try {
+            String v = PropertyUtil.getPropertyValue(key, "");
+            return v == null ? "" : v.trim();
+        } catch (RuntimeException ex) {
+            return "";
+        }
+    }
+
     public class VaultMappings {
 
         public static Map<String, String> getMappings() {
@@ -456,4 +491,5 @@ public class PropertyUtil {
             super(message, cause);
         }
     }
+
 }

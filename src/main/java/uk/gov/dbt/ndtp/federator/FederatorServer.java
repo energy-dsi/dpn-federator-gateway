@@ -92,9 +92,20 @@ public class FederatorServer {
      * @throws IOException if initialization fails
      */
     public static void main(final String[] args) {
+        // TELEMETRY COMMENTED OUT - OTel SDK init and heartbeat disabled.
+        // uk.gov.dbt.ndtp.federator.common.telemetry.OpenTelemetryConfig.initialize();
+        //
+        // uk.gov.dbt.ndtp.federator.common.telemetry.HeartbeatService.start(
+        //         "federator-server",
+        //         java.time.Duration.ofSeconds(Long.parseLong(
+        //                 System.getenv().getOrDefault("HEARTBEAT_INTERVAL_SECONDS", "900"))));
+
         // Initialize properties if not already done
         if (!PropertyUtil.initializeProperties()) {
-            LOGGER.error("Failed to initialize properties. Exiting.");
+            // TELEMETRY COMMENTED OUT - CriticalLogUtil replaced with plain LOGGER.error.
+            // uk.gov.dbt.ndtp.federator.common.telemetry.CriticalLogUtil.logCritical(
+            //         LOGGER, "Failed to initialize properties. federator-server cannot start. Exiting.");
+            LOGGER.error("Failed to initialize properties. federator-server cannot start. Exiting.");
             System.exit(1);
         }
 

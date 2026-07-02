@@ -24,24 +24,44 @@ and is legally attributed to the Department for Business and Trade (UK) as the g
 
 <configuration>
 
+    <!-- TELEMETRY COMMENTED OUT: OtelJsonLayout and all OpenTelemetry appenders removed.
+         Reverted to a standard PatternLayout console appender so the application logs
+         normally without any OpenTelemetry dependency.
+
+         The original OTel logging config (OtelJsonLayout + OTEL_MDC + OpenTelemetry
+         appenders) is preserved in version control / earlier revisions if telemetry
+         needs to be re-enabled. -->
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
-            <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
         </encoder>
     </appender>
 
-    <appender name="ASYNC_CONSOLE"
-              class="ch.qos.logback.classic.AsyncAppender">
-        <discardingThreshold>0</discardingThreshold> <!-- default 20, means drop lower event when has 20% capacity remaining -->
+    <appender name="ASYNC_CONSOLE" class="ch.qos.logback.classic.AsyncAppender">
+        <discardingThreshold>0</discardingThreshold>
         <appender-ref ref="CONSOLE"/>
-        <includeCallerData>false</includeCallerData><!-- default false -->
-        <neverBlock>true</neverBlock><!-- default false, set to true to cause the Appender not block the application and just drop the messages -->
+        <neverBlock>true</neverBlock>
     </appender>
+
+    <!-- TELEMETRY COMMENTED OUT: OpenTelemetry MDC + OTLP appenders removed.
+    <appender name="OTEL_MDC" class="io.opentelemetry.instrumentation.logback.mdc.v1_0.OpenTelemetryAppender">
+        <appender-ref ref="ASYNC_CONSOLE"/>
+    </appender>
+    <appender name="OpenTelemetry" class="io.opentelemetry.instrumentation.logback.appender.v1_0.OpenTelemetryAppender">
+        <captureExperimentalAttributes>true</captureExperimentalAttributes>
+        <captureCodeAttributes>true</captureCodeAttributes>
+        <captureMdcAttributes>*</captureMdcAttributes>
+    </appender>
+    -->
 
     <logger name="uk.gov.dbt.ndtp.federator" level="DEBUG"/>
 
     <root level="INFO">
         <appender-ref ref="ASYNC_CONSOLE"/>
+        <!-- TELEMETRY COMMENTED OUT:
+        <appender-ref ref="OTEL_MDC"/>
+        <appender-ref ref="OpenTelemetry"/>
+        -->
     </root>
 
 </configuration>

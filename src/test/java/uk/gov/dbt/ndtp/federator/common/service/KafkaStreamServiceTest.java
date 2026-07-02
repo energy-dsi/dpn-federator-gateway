@@ -28,11 +28,13 @@ import uk.gov.dbt.ndtp.federator.common.model.dto.ProducerDTO;
 import uk.gov.dbt.ndtp.federator.common.model.dto.ProductDTO;
 import uk.gov.dbt.ndtp.federator.common.service.config.ProducerConfigService;
 import uk.gov.dbt.ndtp.federator.common.service.kafka.KafkaStreamService;
+import uk.gov.dbt.ndtp.federator.common.utils.KafkaUtil;
 import uk.gov.dbt.ndtp.federator.common.utils.ProducerConsumerConfigServiceFactory;
 import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
 import uk.gov.dbt.ndtp.federator.server.grpc.GRPCContextKeys;
 import uk.gov.dbt.ndtp.federator.server.interfaces.StreamObservable;
 import uk.gov.dbt.ndtp.grpc.TopicRequest;
+import uk.gov.dbt.ndtp.secure.agent.sources.kafka.KafkaEventSource;
 
 class KafkaStreamServiceTest {
 
@@ -153,6 +155,19 @@ class KafkaStreamServiceTest {
         }
     }
 
+    @SuppressWarnings("unchecked")
+    private KafkaEventSource.Builder<Object, Object> buildMockKafkaBuilder(
+            KafkaEventSource<Object, Object> mockEventSource) {
+        KafkaEventSource.Builder<Object, Object> mockKafkaBuilder = mock(KafkaEventSource.Builder.class);
+        when(mockKafkaBuilder.keyDeserializer(any(Class.class))).thenReturn(mockKafkaBuilder);
+        when(mockKafkaBuilder.valueDeserializer(any(Class.class))).thenReturn(mockKafkaBuilder);
+        when(mockKafkaBuilder.topic(anyString())).thenReturn(mockKafkaBuilder);
+        when(mockKafkaBuilder.consumerGroup(anyString())).thenReturn(mockKafkaBuilder);
+        when(mockKafkaBuilder.readPolicy(any())).thenReturn(mockKafkaBuilder);
+        when(mockKafkaBuilder.build()).thenReturn(mockEventSource);
+        return mockKafkaBuilder;
+    }
+
     // -------------------- Positive test for streamToClient --------------------
 
     @Test
@@ -185,12 +200,29 @@ class KafkaStreamServiceTest {
         ProducerConfigDTO producerCfg =
                 ProducerConfigDTO.builder().producers(mockProducerDtos).build();
 
+        // Mock the Kafka builder/source so RdfMessageConductor's KafkaEventMessageConsumer
+        // never opens a real network connection to a broker (was causing
+        // "connection to node -1 (localhost/127.0.0.1:9092) could not be established" floods
+        // and ~90s hangs because the real Kafka client retried in the background).
+        // A generic helper (buildMockKafkaBuilder) is used instead of a raw-typed local variable:
+        // raw KafkaEventSource.Builder locals can make javac/IDE fail to resolve
+        // when(...).thenReturn(...) against the builder's own generically-typed fluent methods
+        // (e.g. "Cannot resolve method 'thenReturn(Builder)'").
+        KafkaEventSource<Object, Object> mockEventSource = mock(KafkaEventSource.class);
+        KafkaEventSource.Builder<Object, Object> mockKafkaBuilder = buildMockKafkaBuilder(mockEventSource);
+        when(mockEventSource.isClosed()).thenReturn(false);
+        doNothing().when(mockEventSource).close();
+
         try (MockedStatic<ProducerConsumerConfigServiceFactory> mockedFactory =
-                Mockito.mockStatic(ProducerConsumerConfigServiceFactory.class)) {
+                        Mockito.mockStatic(ProducerConsumerConfigServiceFactory.class);
+                MockedStatic<KafkaUtil> mockedKafkaUtil = Mockito.mockStatic(KafkaUtil.class)) {
             mockedFactory
                     .when(ProducerConsumerConfigServiceFactory::getProducerConfigService)
                     .thenReturn(mockService);
             when(mockService.getProducerConfiguration()).thenReturn(producerCfg);
+            mockedKafkaUtil
+                    .when(() -> KafkaUtil.<Object, Object>getKafkaSourceBuilder())
+                    .thenReturn(mockKafkaBuilder);
 
             Future mockFuture = mock(Future.class);
 

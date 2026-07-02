@@ -42,6 +42,7 @@ import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import uk.gov.dbt.ndtp.federator.common.utils.KafkaUtil;
 import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
+import uk.gov.dbt.ndtp.federator.common.utils.TestPropertyUtil;
 import uk.gov.dbt.ndtp.secure.agent.sources.kafka.KafkaEvent;
 import uk.gov.dbt.ndtp.secure.agent.sources.kafka.KafkaEventSource;
 
@@ -78,11 +79,19 @@ class KafkaEventMessageConsumerTest {
         doNothing().when(mockEventSource).close();
     }
 
+    @AfterEach
+    void tearDownTests() {
+        // setUpProperties() initializes PropertyUtil; clear it so it doesn't leak into
+        // other test classes that run later in the same JVM.
+        TestPropertyUtil.clearProperties();
+    }
+
     MessageConsumer<KafkaEvent<String, String>> getConsumer() {
         return new KafkaEventMessageConsumer<>(
                 StringDeserializer.class, StringDeserializer.class, TOPIC, OFFSET, CLIENT_ID);
     }
 
+    @Test
     void test_getNextMessage() {
         // given
         ConsumerRecord<String, String> consumerRecord = new ConsumerRecord<>(TOPIC, 0, OFFSET, null, null);

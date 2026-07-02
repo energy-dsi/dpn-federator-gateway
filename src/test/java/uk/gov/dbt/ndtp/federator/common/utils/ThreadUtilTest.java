@@ -34,9 +34,9 @@ import static uk.gov.dbt.ndtp.federator.common.utils.ThreadUtil.awaitShutdown;
 import static uk.gov.dbt.ndtp.federator.common.utils.ThreadUtil.threadExecutor;
 
 import java.util.Collections;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
-import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import org.apache.commons.lang3.RandomStringUtils;
 import org.junit.jupiter.api.Test;
@@ -49,14 +49,18 @@ class ThreadUtilTest {
             RandomStringUtils.insecure().nextAlphabetic(6);
 
     @Test
-    void test_threadExecutor_namesThreads() {
+    void test_threadExecutor_namesThreads() throws ExecutionException, InterruptedException {
         // given
         ExecutorService service = threadExecutor(RANDOM_THREAD_NAME);
-        // when
-        String threadName = ((ThreadPoolExecutor) service)
-                .getThreadFactory()
-                .newThread(this::count)
-                .getName();
+
+        // when - threadExecutor() returns a ContextPropagatingExecutorService wrapper
+        // (a private inner class with no exposed delegate), so the real ThreadPoolExecutor
+        // and its ThreadFactory cannot be reached via casting. Instead, submit a task and
+        // observe the actual worker thread's name directly - this exercises the same naming
+        // behaviour through the public ExecutorService API.
+        Future<String> nameFuture = service.submit(() -> Thread.currentThread().getName());
+        String threadName = nameFuture.get();
+
         // then
         assertTrue(threadName.startsWith(RANDOM_THREAD_NAME));
     }
