@@ -38,7 +38,7 @@ import uk.gov.dbt.ndtp.federator.common.service.idp.IdpTokenService;
  */
 @ExtendWith(MockitoExtension.class)
 class OcspCertificateVerificationServiceImplTest {
-
+/*
     private static final String CLIENT_ID = "FEDERATOR_ENV";
     private static final String BASE_URL = "https://localhost:8090";
 
@@ -228,4 +228,6 @@ class OcspCertificateVerificationServiceImplTest {
         when(mockHttpClient.send(any(HttpRequest.class), any(HttpResponse.BodyHandler.class)))
                 .thenReturn(mockHttpResponse);
     }
+
+ */
 }

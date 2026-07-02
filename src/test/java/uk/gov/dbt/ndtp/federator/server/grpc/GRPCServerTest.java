@@ -16,9 +16,11 @@ import javax.net.ssl.TrustManager;
 import javax.net.ssl.X509KeyManager;
 import javax.net.ssl.X509TrustManager;
 import org.junit.jupiter.api.Test;
+import org.mockito.MockedConstruction;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import uk.gov.dbt.ndtp.federator.common.service.idp.IdpTokenService;
+import uk.gov.dbt.ndtp.federator.common.service.ocsp.OcspCertificateVerificationServiceImpl;
 import uk.gov.dbt.ndtp.federator.common.utils.GRPCUtils;
 import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
 import uk.gov.dbt.ndtp.federator.common.utils.SSLUtils;
@@ -53,6 +55,9 @@ class GRPCServerTest {
             propertyUtilMockedStatic
                     .when(() -> PropertyUtil.getPropertyValue(any()))
                     .thenReturn("dummy");
+            propertyUtilMockedStatic
+                    .when(() -> PropertyUtil.getPropertyValue(anyString(), anyString()))
+                    .thenReturn("300");
 
             sslUtilsMockedStatic
                     .when(() -> SSLUtils.createKeyManagerFromP12(any(String.class), any(String.class)))
@@ -74,8 +79,14 @@ class GRPCServerTest {
 
             Set<String> sharedHeaders = new HashSet<>();
 
-            GRPCServer server = new GRPCServer(sharedHeaders);
-            assertNotNull(server);
+            // Prevent OcspCertificateVerificationServiceImpl's real constructor from running -
+            // it builds a java.net.http.HttpClient with an SSLContext derived from truststore
+            // properties, which isn't meaningful in this unit test and otherwise NPEs.
+            try (MockedConstruction<OcspCertificateVerificationServiceImpl> ignoredOcsp =
+                    mockConstruction(OcspCertificateVerificationServiceImpl.class)) {
+                GRPCServer server = new GRPCServer(sharedHeaders);
+                assertNotNull(server);
+            }
         }
     }
 
@@ -105,6 +116,9 @@ class GRPCServerTest {
                     .when(() -> PropertyUtil.getPropertyValue(any()))
                     .thenReturn("dummy");
             propertyUtilMockedStatic
+                    .when(() -> PropertyUtil.getPropertyValue(anyString(), anyString()))
+                    .thenReturn("300");
+            propertyUtilMockedStatic
                     .when(() -> PropertyUtil.getPropertiesFromFilePath(any()))
                     .thenReturn(mockNestedProps);
 
@@ -131,8 +145,14 @@ class GRPCServerTest {
 
             Set<String> sharedHeaders = new HashSet<>();
 
-            GRPCServer server = new GRPCServer(sharedHeaders);
-            assertNotNull(server);
+            // Prevent OcspCertificateVerificationServiceImpl's real constructor from running -
+            // it builds a java.net.http.HttpClient with an SSLContext derived from truststore
+            // properties, which isn't meaningful in this unit test and otherwise NPEs.
+            try (MockedConstruction<OcspCertificateVerificationServiceImpl> ignoredOcsp =
+                    mockConstruction(OcspCertificateVerificationServiceImpl.class)) {
+                GRPCServer server = new GRPCServer(sharedHeaders);
+                assertNotNull(server);
+            }
         }
     }
 }
