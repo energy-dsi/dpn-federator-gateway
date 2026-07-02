@@ -34,6 +34,7 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
+import org.mockito.Mockito;
 import uk.gov.dbt.ndtp.federator.client.connection.ConnectionProperties;
 import uk.gov.dbt.ndtp.federator.common.checksum.PayloadChecksumUtil;
 import uk.gov.dbt.ndtp.federator.common.utils.KafkaUtil;
@@ -383,5 +384,63 @@ class GRPCTopicClientTest {
         boolean pass = PayloadChecksumUtil.verify(payload, "", "topic", 2L);
         assertTrue(pass, "Blank checksum must be tolerated (old server)");
     }
+
+    private GRPCTopicClient buildClient() {
+        ManagedChannel mockChannel = Mockito.mock(ManagedChannel.class);
+        // uses the protected pass-through constructor already present in GRPCTopicClient,
+        // which exists specifically to support tests injecting a mock channel
+        return new GRPCTopicClient("test-client", "test-key", "test-server", "test-prefix", mockChannel);
+    }
+
+    @Test
+    void logConnectionFailureGuidance_unavailable_returnsActionableGuidanceWithNextSteps() {
+        GRPCTopicClient client = buildClient();
+        StatusRuntimeException ex = new StatusRuntimeException(Status.UNAVAILABLE);
+
+        String guidance = client.logConnectionFailureGuidance(ex);
+
+        assertTrue(guidance.contains("Check that the host and port are correct"));
+    }
+
+    @Test
+    void logConnectionFailureGuidance_deadlineExceeded_mentionsTimeout() {
+        GRPCTopicClient client = buildClient();
+        StatusRuntimeException ex = new StatusRuntimeException(Status.DEADLINE_EXCEEDED);
+
+        String guidance = client.logConnectionFailureGuidance(ex);
+
+        assertTrue(guidance.contains("timed out"));
+    }
+
+    @Test
+    void logConnectionFailureGuidance_unauthenticated_mentionsIdpToken() {
+        GRPCTopicClient client = buildClient();
+        StatusRuntimeException ex = new StatusRuntimeException(Status.UNAUTHENTICATED);
+
+        String guidance = client.logConnectionFailureGuidance(ex);
+
+        assertTrue(guidance.contains("IDP token service"));
+    }
+
+    @Test
+    void logConnectionFailureGuidance_permissionDenied_mentionsAuthorisation() {
+        GRPCTopicClient client = buildClient();
+        StatusRuntimeException ex = new StatusRuntimeException(Status.PERMISSION_DENIED);
+
+        String guidance = client.logConnectionFailureGuidance(ex);
+
+        assertTrue(guidance.contains("Authorisation denied"));
+    }
+
+    @Test
+    void logConnectionFailureGuidance_unknownError_returnsGenericMessage() {
+        GRPCTopicClient client = buildClient();
+        StatusRuntimeException ex = new StatusRuntimeException(Status.INTERNAL);
+
+        String guidance = client.logConnectionFailureGuidance(ex);
+
+        assertTrue(guidance.contains("unexpected error"));
+    }
+
 
 }

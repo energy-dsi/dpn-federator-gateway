@@ -8,18 +8,12 @@ import uk.gov.dbt.ndtp.federator.common.utils.SSLUtils;
 import uk.gov.dbt.ndtp.federator.exceptions.OcspVerificationException;
 
 import javax.net.ssl.SSLContext;
-import java.io.FileInputStream;
-import java.io.InputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.security.KeyStore;
-import java.security.cert.Certificate;
-import java.security.cert.X509Certificate;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.Enumeration;
 import java.util.Properties;
 
 @Slf4j
@@ -28,18 +22,14 @@ public class OcspCertificateVerificationServiceImpl
 
 
 
-    private final String p12Password;      // from property: client.ssl.key-store-password
+
     private final String managementNodeBaseUrl;
     private final HttpClient httpClient;
     private final OtelCertificateVerificationLogger otelLogger;
-    private final Properties clientProps;
     private final IdpTokenService idpTokenService;
 
     public OcspCertificateVerificationServiceImpl(
-            Properties clientProps, Properties commonProps, IdpTokenService idpTokenService) {
-        this.clientProps = clientProps;
-        this.p12Password     = clientProps.getProperty("client.p12Password");
-
+            Properties clientProps, IdpTokenService idpTokenService) {
 
         this.managementNodeBaseUrl = clientProps.getProperty("management.node.base.url");
         this.idpTokenService = idpTokenService;
@@ -61,13 +51,13 @@ public class OcspCertificateVerificationServiceImpl
         Instant timestamp = Instant.now();
 
         OcspStatus status = OcspStatus.NOT_FOUND;
-
         try {
 
             status = checkCertificateStatus(producerIdpClientId);
 
-        } catch (Exception e) {
 
+        } catch (Exception e) {
+            log.error("OCSP check failed for clientId={}: {}", producerIdpClientId, e.getMessage(), e);
             otelLogger.log(producerIdpClientId, timestamp, OcspStatus.NOT_FOUND);
         }
 
@@ -79,11 +69,11 @@ public class OcspCertificateVerificationServiceImpl
 
             String clientId) throws Exception {
 
-        // Build URL with both clientId and serialNumber
 
         String url = managementNodeBaseUrl +
 
-                "/api/v1/certificate/ocsp?clientId=" + clientId ;
+                "/api/v1/certificate/ocsp?clientId=" + clientId;
+
 
         String token = idpTokenService.fetchToken();
 
@@ -119,37 +109,16 @@ public class OcspCertificateVerificationServiceImpl
 
         return switch (status) {
 
-            case "ACTIVE"   -> OcspStatus.ACTIVE;
+            case "ACTIVE" -> OcspStatus.ACTIVE;
 
-            case "REVOKED"  -> OcspStatus.REVOKED;
+            case "REVOKED" -> OcspStatus.REVOKED;
 
-            case "EXPIRED"  -> OcspStatus.EXPIRED;
+            case "EXPIRED" -> OcspStatus.EXPIRED;
 
-            default         -> OcspStatus.NOT_FOUND;
+            default -> OcspStatus.NOT_FOUND;
 
         };
 
-    }
-
-
-
-    private X509Certificate loadClientCertificate() {
-        try (InputStream is = new FileInputStream(clientProps.getProperty("client.p12FilePath"))) {
-            KeyStore ks = KeyStore.getInstance("PKCS12");
-            ks.load(is, p12Password.toCharArray());
-            // Get first certificate entry from the keystore
-            Enumeration<String> aliases = ks.aliases();
-            while (aliases.hasMoreElements()) {
-                String alias = aliases.nextElement();
-                Certificate cert = ks.getCertificate(alias);
-                if (cert instanceof X509Certificate x509) {
-                    return x509;
-                }
-            }
-            throw new OcspVerificationException("No X509Certificate found in P12 keystore");
-        } catch (Exception e) {
-            throw new OcspVerificationException("Failed to load client certificate", e);
-        }
     }
 
 }

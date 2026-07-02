@@ -1,12 +1,5 @@
 package uk.gov.dbt.ndtp.federator.client.jobs.handlers;
 
-// import io.opentelemetry.api.trace.Span;
-// import io.opentelemetry.api.trace.StatusCode;
-// import io.opentelemetry.api.trace.Tracer;
-// import io.opentelemetry.context.Scope;
-import java.util.function.BiFunction;
-import java.util.function.Supplier;
-import java.util.function.ToLongBiFunction;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import uk.gov.dbt.ndtp.federator.WrappedGRPCClient;
@@ -30,7 +23,8 @@ import java.util.function.ToLongBiFunction;
 public class ClientGRPCJob implements Job {
 
     static final String FEDERATOR_CLIENT_TARGET_TOPIC = "federator-client-target-topic";
-
+    private static final String PLAYBOOK_URL =
+            "https://github.com/energy-dsi/dpn-integration-playbook";
     // Injected collaborators for testability (property-settable)
     @Setter
     private Supplier<String> prefixSupplier;
@@ -101,11 +95,13 @@ public class ClientGRPCJob implements Job {
             long offset = offsetProvider.applyAsLong(grpcClient.getRedisPrefix(), request.getTopic());
             grpcClient.processTopic(request.getTopic(), offset);
         } catch (Exception e) {
-            // jobSpan.recordException(e);
-            // jobSpan.setStatus(StatusCode.ERROR, e.getMessage());
-            throw new ClientGRPCJobException(
-                    "Failed to process topic '" + request.getTopic() + "' via GRPC client", e);
-        } // finally { jobSpan.end(); }
+            log.error(
+
+                    "Topic processing stopped due to connection error. Cause={}. {} "
+                            + "See the DPN integration playbook for troubleshooting steps: {}",
+                    e.getMessage(), "Failed to process topic 'output-topic' via GRPC client", PLAYBOOK_URL);
+            throw new ClientGRPCJobException("Failed to process topic '" + request.getTopic() + "' via GRPC client", e);
+        }
     }
 
     @Override
