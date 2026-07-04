@@ -24,17 +24,17 @@ and is legally attributed to the Department for Business and Trade (UK) as the g
 
 <configuration>
 
-    <!-- Console appender using OtelJsonLayout: emits single-line OTel JSON logs
-         (timestamp, severity_number/text, body, resource.*, attributes.*, and
-         conditional trace_id/span_id when inside an active span). -->
+    <!-- Console appender: PLAIN TEXT pattern for human-readable stdout logs - reverted to the
+         pre-OTel-telemetry format (matches src/test/resources/logback-test.xml), with trace_id/
+         span_id appended so logs stay correlatable across federator-server/federator-client
+         without needing to go to the collector. Structured OTel JSON is no longer written to
+         stdout - it is still captured, in full OTel format, separately via the "OpenTelemetry"
+         appender below, which exports complete OTel log records (trace context,
+         event.name/component.name/heartbeat.* attributes, code location, etc.) via OTLP to the
+         collector. -->
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
-        <encoder class="ch.qos.logback.core.encoder.LayoutWrappingEncoder">
-            <layout class="uk.gov.dbt.ndtp.federator.common.logging.OtelJsonLayout">
-                <!-- serviceName falls back to OTEL_SERVICE_NAME env var if blank -->
-                <serviceName></serviceName>
-                <serviceVersion></serviceVersion>
-                <sourceRoot>uk.gov.dbt.ndtp.federator</sourceRoot>
-            </layout>
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} [trace_id=%X{trace_id:-}, span_id=%X{span_id:-}] - %msg%n</pattern>
         </encoder>
     </appender>
 
@@ -44,27 +44,32 @@ and is legally attributed to the Department for Business and Trade (UK) as the g
         <neverBlock>true</neverBlock>
     </appender>
 
-
+    <!-- Populates MDC with trace_id/span_id/trace_flags from the active span (if any) before the
+         event reaches CONSOLE's pattern above, which reads them via %X{...}. Only feeds the
+         stdout path - it has no effect on the OpenTelemetry/OTLP appender below, which reads
+         trace context directly from the active Span via the OTel Context API regardless. -->
     <appender name="OTEL_MDC" class="io.opentelemetry.instrumentation.logback.mdc.v1_0.OpenTelemetryAppender">
         <appender-ref ref="ASYNC_CONSOLE"/>
     </appender>
+
     <appender name="OpenTelemetry" class="io.opentelemetry.instrumentation.logback.appender.v1_0.OpenTelemetryAppender">
         <captureExperimentalAttributes>true</captureExperimentalAttributes>
         <captureCodeAttributes>true</captureCodeAttributes>
         <captureMdcAttributes>*</captureMdcAttributes>
         <!-- Forward SLF4J key-value pairs (event.name, component.name, heartbeat.*, etc.)
-             to the collector, matching what OtelJsonLayout writes to the console. Without
-             this, .addKeyValue(...) attributes are dropped on the OTLP path. -->
+             to the collector. Without this, .addKeyValue(...) attributes are dropped on the
+             OTLP path. -->
         <captureKeyValuePairAttributes>true</captureKeyValuePairAttributes>
         <captureLoggerContext>true</captureLoggerContext>
     </appender>
 
     <logger name="uk.gov.dbt.ndtp.federator" level="DEBUG"/>
 
-    <!-- DSI FIX: root previously referenced both ASYNC_CONSOLE directly AND OTEL_MDC (which
-         itself forwards to ASYNC_CONSOLE), causing every event to reach CONSOLE/OtelJsonLayout
-         twice - once undecorated, once via OTEL_MDC's trace_id/span_id/trace_flags MDC
-         injection. OTEL_MDC already delivers to ASYNC_CONSOLE, so the direct ref is removed. -->
+    <!-- Root fans out to exactly two independent destinations:
+         - OTEL_MDC -> ASYNC_CONSOLE: plain-text to stdout, now WITH trace_id/span_id (via MDC).
+         - OpenTelemetry: full OTel-format log record, via OTLP, to the collector.
+         These are two separate delivery chains reading the same underlying event, so there is
+         no duplication - each event reaches stdout exactly once and the collector exactly once. -->
     <root level="INFO">
         <appender-ref ref="OTEL_MDC"/>
         <appender-ref ref="OpenTelemetry"/>
