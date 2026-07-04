@@ -1,5 +1,12 @@
 package uk.gov.dbt.ndtp.federator.client.jobs.handlers;
 
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.api.trace.StatusCode;
+import io.opentelemetry.api.trace.Tracer;
+import io.opentelemetry.context.Scope;
+import java.util.function.BiFunction;
+import java.util.function.Supplier;
+import java.util.function.ToLongBiFunction;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import uk.gov.dbt.ndtp.federator.WrappedGRPCClient;
@@ -8,7 +15,7 @@ import uk.gov.dbt.ndtp.federator.client.grpc.GRPCTopicClient;
 import uk.gov.dbt.ndtp.federator.client.jobs.Job;
 import uk.gov.dbt.ndtp.federator.client.jobs.params.ClientGRPCJobParams;
 import uk.gov.dbt.ndtp.federator.client.jobs.params.JobParams;
-// import uk.gov.dbt.ndtp.federator.common.telemetry.OpenTelemetryConfig;
+import uk.gov.dbt.ndtp.federator.common.telemetry.OpenTelemetryConfig;
 import uk.gov.dbt.ndtp.federator.common.service.ocsp.OcspCertificateVerificationService;
 import uk.gov.dbt.ndtp.federator.common.service.ocsp.OcspStatus;
 import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
@@ -79,31 +86,38 @@ public class ClientGRPCJob implements Job {
         // call. Without this, OpenTelemetryAppender has nothing to stamp onto log lines that
         // happen just before/after the RPC, even though they're part of the same logical
         // operation.
-        // TELEMETRY COMMENTED OUT - tracing span removed, GRPC processing logic preserved.
-        // Tracer tracer = OpenTelemetryConfig.get().getTracer("uk.gov.dbt.ndtp.federator.client.jobs");
-        // Span jobSpan = tracer.spanBuilder("ClientGRPCJob.run")
-        //         .setAttribute("dpn.topic", request.getTopic())
-        //         .setAttribute("dpn.target_host", connectionProperties.serverHost())
-        //         .startSpan();
+        Tracer tracer = OpenTelemetryConfig.get().getTracer("uk.gov.dbt.ndtp.federator.client.jobs");
+        Span jobSpan = tracer.spanBuilder("ClientGRPCJob.run")
+                .setAttribute("dpn.topic", request.getTopic())
+                .setAttribute("dpn.target_host", connectionProperties.serverHost())
+                .startSpan();
 
         log.info(
                 "Calling GRPC endpoint of producer:{} , Topic {}",
                 connectionProperties.serverHost(),
                 request.getTopic());
-
+        try (Scope scope = jobSpan.makeCurrent()) {
+            log.info(
+                    "Calling GRPC endpoint of producer:{} , Topic {}",
+                    connectionProperties.serverHost(),
+                    request.getTopic());
+        }
         try (WrappedGRPCClient grpcClient = clientFactory.apply(connectionProperties, prefix)) {
             long offset = offsetProvider.applyAsLong(grpcClient.getRedisPrefix(), request.getTopic());
             grpcClient.processTopic(request.getTopic(), offset);
         } catch (Exception e) {
+            jobSpan.recordException(e);
+            jobSpan.setStatus(StatusCode.ERROR, e.getMessage());
             log.error(
 
                     "Topic processing stopped due to connection error. Cause={}. {} "
                             + "See the DPN integration playbook for troubleshooting steps: {}",
                     e.getMessage(), "Failed to process topic 'output-topic' via GRPC client", PLAYBOOK_URL);
             throw new ClientGRPCJobException("Failed to process topic '" + request.getTopic() + "' via GRPC client", e);
+        }finally {
+            jobSpan.end();
         }
     }
-
     @Override
     public String toString() {
         return "Client GRPC Job";

@@ -3,7 +3,7 @@ package uk.gov.dbt.ndtp.federator.client.jobs.handlers;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
-// import io.opentelemetry.api.OpenTelemetry; // TELEMETRY COMMENTED OUT
+import io.opentelemetry.api.OpenTelemetry;
 import java.math.BigDecimal;
 import java.util.Collections;
 import org.jobrunr.scheduling.JobScheduler;
@@ -19,7 +19,7 @@ import uk.gov.dbt.ndtp.federator.common.model.dto.ProducerDTO;
 import uk.gov.dbt.ndtp.federator.common.model.dto.ProductConsumerDTO;
 import uk.gov.dbt.ndtp.federator.common.model.dto.ProductDTO;
 import uk.gov.dbt.ndtp.federator.common.service.config.ConsumerConfigService;
-// import uk.gov.dbt.ndtp.federator.common.telemetry.OpenTelemetryConfig; // TELEMETRY COMMENTED OUT
+import uk.gov.dbt.ndtp.federator.common.telemetry.OpenTelemetryConfig;
 import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
 import uk.gov.dbt.ndtp.federator.common.utils.RedisUtil;
 
@@ -30,7 +30,7 @@ class ClientDynamicConfigJobTest {
     private JobScheduler jobScheduler;
     private MockedStatic<PropertyUtil> propertyUtilMockedStatic;
     private MockedStatic<RedisUtil> redisUtilMockedStatic;
-    // private MockedStatic<OpenTelemetryConfig> openTelemetryConfigMockedStatic; // TELEMETRY COMMENTED OUT
+    private MockedStatic<OpenTelemetryConfig> openTelemetryConfigMockedStatic;
 
     @BeforeEach
     void setUp() {
@@ -45,15 +45,15 @@ class ClientDynamicConfigJobTest {
         // in production this singleton is set once via initialize() at process startup, but
         // unit tests never call that, so the static call must be mocked here to avoid
         // "OpenTelemetryConfig.initialize() must be called before OpenTelemetryConfig.get()".
-        // openTelemetryConfigMockedStatic = mockStatic(OpenTelemetryConfig.class); // TELEMETRY COMMENTED OUT
-        // openTelemetryConfigMockedStatic.when(OpenTelemetryConfig::get).thenReturn(OpenTelemetry.noop()); // TELEMETRY COMMENTED OUT
+        openTelemetryConfigMockedStatic = mockStatic(OpenTelemetryConfig.class);
+        openTelemetryConfigMockedStatic.when(OpenTelemetryConfig::get).thenReturn(OpenTelemetry.noop());
     }
 
     @AfterEach
     void tearDown() {
         propertyUtilMockedStatic.close();
         redisUtilMockedStatic.close();
-        // openTelemetryConfigMockedStatic.close(); // TELEMETRY COMMENTED OUT
+        openTelemetryConfigMockedStatic.close();
     }
 
     @Test

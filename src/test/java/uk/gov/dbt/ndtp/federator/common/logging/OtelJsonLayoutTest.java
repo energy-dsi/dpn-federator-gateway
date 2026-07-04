@@ -22,7 +22,7 @@ import org.junit.jupiter.api.Test;
  * inside an active span (Sample 3), absent for non-traced logs (Samples 1 and 4).
  */
 class OtelJsonLayoutTest {
-/*
+
     private final ObjectMapper mapper = new ObjectMapper();
 
     // A LoggerContext-backed Logger is required to safely construct LoggingEvent instances:
@@ -84,27 +84,32 @@ class OtelJsonLayoutTest {
     void sample3StyleLog_includesTopLevelTraceContextInsideActiveSpan() throws Exception {
         OtelJsonLayout layout = new OtelJsonLayout();
 
-        SpanContext spanContext = SpanContext.create(
-                "a1b2c3d4e5f6789012345678901234ab",
-                "1234567890abcdef",
-                TraceFlags.getSampled(),
-                TraceState.getDefault());
-        Span span = Span.wrap(spanContext);
+        // DSI EDIT: OtelJsonLayout now reads trace_id/span_id/trace_flags from the MDC snapshot
+        // (populated upstream by the OTEL_MDC appender, io.opentelemetry:opentelemetry-logback-
+        // mdc-1.0, synchronously on the original calling thread) rather than from Span.current()
+        // at layout time - Span.current()'s ThreadLocal context does not survive the hop onto
+        // ASYNC_CONSOLE's background worker thread in production, so this test simulates the
+        // MDC snapshot directly instead of a real makeCurrent() span (which would no longer be
+        // visible to the layout, exactly as in production).
+        LoggingEvent event = newEvent(
+                "GRPCTopicClient",
+                Level.INFO,
+                "File content read",
+                java.util.Map.of(
+                        "trace_id", "a1b2c3d4e5f6789012345678901234ab",
+                        "span_id", "1234567890abcdef",
+                        "trace_flags", "01"));
 
-        try (Scope scope = Context.current().with(span).makeCurrent()) {
-            LoggingEvent event = newEvent("GRPCTopicClient", Level.INFO, "File content read");
+        JsonNode node = mapper.readTree(layout.doLayout(event));
 
-            JsonNode node = mapper.readTree(layout.doLayout(event));
+        // Conditional fields - must be PRESENT and TOP-LEVEL, matching Sample 3
+        assertEquals("a1b2c3d4e5f6789012345678901234ab", node.get("trace_id").asText());
+        assertEquals("1234567890abcdef", node.get("span_id").asText());
+        assertEquals("01", node.get("trace_flags").asText());
 
-            // Conditional fields - must be PRESENT and TOP-LEVEL, matching Sample 3
-            assertEquals("a1b2c3d4e5f6789012345678901234ab", node.get("trace_id").asText());
-            assertEquals("1234567890abcdef", node.get("span_id").asText());
-            assertEquals("01", node.get("trace_flags").asText());
-
-            // Must NOT be duplicated under attributes
-            assertFalse(node.get("attributes").has("trace_id"));
-            assertFalse(node.get("attributes").has("span_id"));
-        }
+        // Must NOT be duplicated under attributes
+        assertFalse(node.get("attributes").has("trace_id"));
+        assertFalse(node.get("attributes").has("span_id"));
     }
 
     @Test
@@ -149,37 +154,29 @@ class OtelJsonLayoutTest {
     void mdcPopulatedTraceFields_areNotDuplicatedUnderAttributes() throws Exception {
         // Simulates the OTEL_MDC appender (logback-mdc-1.0) having already populated MDC with
         // trace_id/span_id/trace_flags upstream in the appender chain - OtelJsonLayout must not
-        // copy these into attributes, since they are already emitted top-level from the span.
+        // copy these into attributes, since they are already emitted top-level, read directly
+        // from this same MDC snapshot (not from Span.current() - see class Javadoc).
         OtelJsonLayout layout = new OtelJsonLayout();
 
-        SpanContext spanContext = SpanContext.create(
-                "b2c3d4e5f6789012345678901234abcd",
-                "234567890abcdef1",
-                TraceFlags.getSampled(),
-                TraceState.getDefault());
-        Span span = Span.wrap(spanContext);
+        LoggingEvent event = newEvent(
+                "GRPCFederatorService",
+                Level.INFO,
+                "Message pushed into Kafka topic",
+                java.util.Map.of(
+                        "trace_id", "b2c3d4e5f6789012345678901234abcd",
+                        "span_id", "234567890abcdef1",
+                        "trace_flags", "01",
+                        "topic", "target-topic"));
 
-        try (Scope scope = Context.current().with(span).makeCurrent()) {
-            LoggingEvent event = newEvent(
-                    "GRPCFederatorService",
-                    Level.INFO,
-                    "Message pushed into Kafka topic",
-                    java.util.Map.of(
-                            "trace_id", "b2c3d4e5f6789012345678901234abcd",
-                            "span_id", "234567890abcdef1",
-                            "trace_flags", "01",
-                            "topic", "target-topic"));
+        JsonNode node = mapper.readTree(layout.doLayout(event));
 
-            JsonNode node = mapper.readTree(layout.doLayout(event));
-
-            assertEquals("b2c3d4e5f6789012345678901234abcd", node.get("trace_id").asText());
-            assertFalse(node.get("attributes").has("trace_id"), "trace_id must not duplicate under attributes");
-            assertFalse(node.get("attributes").has("span_id"), "span_id must not duplicate under attributes");
-            assertFalse(node.get("attributes").has("trace_flags"), "trace_flags must not duplicate under attributes");
-            // real custom attributes still pass through normally
-            assertEquals("target-topic", node.get("attributes").get("topic").asText());
-        }
+        assertEquals("b2c3d4e5f6789012345678901234abcd", node.get("trace_id").asText());
+        assertFalse(node.get("attributes").has("trace_id"), "trace_id must not duplicate under attributes");
+        assertFalse(node.get("attributes").has("span_id"), "span_id must not duplicate under attributes");
+        assertFalse(node.get("attributes").has("trace_flags"), "trace_flags must not duplicate under attributes");
+        // real custom attributes still pass through normally
+        assertEquals("target-topic", node.get("attributes").get("topic").asText());
     }
 
- */
+
 }

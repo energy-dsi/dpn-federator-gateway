@@ -24,16 +24,17 @@ and is legally attributed to the Department for Business and Trade (UK) as the g
 
 <configuration>
 
-    <!-- TELEMETRY COMMENTED OUT: OtelJsonLayout and all OpenTelemetry appenders removed.
-         Reverted to a standard PatternLayout console appender so the application logs
-         normally without any OpenTelemetry dependency.
-
-         The original OTel logging config (OtelJsonLayout + OTEL_MDC + OpenTelemetry
-         appenders) is preserved in version control / earlier revisions if telemetry
-         needs to be re-enabled. -->
+    <!-- Console appender using OtelJsonLayout: emits single-line OTel JSON logs
+         (timestamp, severity_number/text, body, resource.*, attributes.*, and
+         conditional trace_id/span_id when inside an active span). -->
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
-        <encoder>
-            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+        <encoder class="ch.qos.logback.core.encoder.LayoutWrappingEncoder">
+            <layout class="uk.gov.dbt.ndtp.federator.common.logging.OtelJsonLayout">
+                <!-- serviceName falls back to OTEL_SERVICE_NAME env var if blank -->
+                <serviceName></serviceName>
+                <serviceVersion></serviceVersion>
+                <sourceRoot>uk.gov.dbt.ndtp.federator</sourceRoot>
+            </layout>
         </encoder>
     </appender>
 
@@ -43,7 +44,7 @@ and is legally attributed to the Department for Business and Trade (UK) as the g
         <neverBlock>true</neverBlock>
     </appender>
 
-    <!-- TELEMETRY COMMENTED OUT: OpenTelemetry MDC + OTLP appenders removed.
+
     <appender name="OTEL_MDC" class="io.opentelemetry.instrumentation.logback.mdc.v1_0.OpenTelemetryAppender">
         <appender-ref ref="ASYNC_CONSOLE"/>
     </appender>
@@ -51,17 +52,22 @@ and is legally attributed to the Department for Business and Trade (UK) as the g
         <captureExperimentalAttributes>true</captureExperimentalAttributes>
         <captureCodeAttributes>true</captureCodeAttributes>
         <captureMdcAttributes>*</captureMdcAttributes>
+        <!-- Forward SLF4J key-value pairs (event.name, component.name, heartbeat.*, etc.)
+             to the collector, matching what OtelJsonLayout writes to the console. Without
+             this, .addKeyValue(...) attributes are dropped on the OTLP path. -->
+        <captureKeyValuePairAttributes>true</captureKeyValuePairAttributes>
+        <captureLoggerContext>true</captureLoggerContext>
     </appender>
-    -->
 
     <logger name="uk.gov.dbt.ndtp.federator" level="DEBUG"/>
 
+    <!-- DSI FIX: root previously referenced both ASYNC_CONSOLE directly AND OTEL_MDC (which
+         itself forwards to ASYNC_CONSOLE), causing every event to reach CONSOLE/OtelJsonLayout
+         twice - once undecorated, once via OTEL_MDC's trace_id/span_id/trace_flags MDC
+         injection. OTEL_MDC already delivers to ASYNC_CONSOLE, so the direct ref is removed. -->
     <root level="INFO">
-        <appender-ref ref="ASYNC_CONSOLE"/>
-        <!-- TELEMETRY COMMENTED OUT:
         <appender-ref ref="OTEL_MDC"/>
         <appender-ref ref="OpenTelemetry"/>
-        -->
     </root>
 
 </configuration>

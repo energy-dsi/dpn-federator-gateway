@@ -29,17 +29,17 @@ package uk.gov.dbt.ndtp.federator.server.grpc;
 import io.grpc.Status;
 import io.grpc.stub.ServerCallStreamObserver;
 import io.grpc.stub.StreamObserver;
-// import io.opentelemetry.api.trace.Span;
-// import io.opentelemetry.api.trace.StatusCode;
-// import io.opentelemetry.api.trace.Tracer;
-// import io.opentelemetry.context.Scope;
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.api.trace.StatusCode;
+import io.opentelemetry.api.trace.Tracer;
+import io.opentelemetry.context.Scope;
 import java.util.Set;
 import org.apache.kafka.common.errors.InvalidTopicException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import uk.gov.dbt.ndtp.federator.FederatorService;
 import uk.gov.dbt.ndtp.federator.common.annotations.ExcludeFromJacocoGeneratedReport;
-// import uk.gov.dbt.ndtp.federator.common.telemetry.OpenTelemetryConfig;
+import uk.gov.dbt.ndtp.federator.common.telemetry.OpenTelemetryConfig;
 import uk.gov.dbt.ndtp.federator.server.interfaces.StreamObservable;
 import uk.gov.dbt.ndtp.grpc.FederatorServiceGrpc;
 import uk.gov.dbt.ndtp.grpc.FileStreamEvent;
@@ -79,20 +79,22 @@ public class GRPCFederatorService extends FederatorServiceGrpc.FederatorServiceI
         // Manual span: provides trace_id/span_id/trace_flags on every log line emitted during
         // topic streaming (OtelJsonLayout reads Span.current() directly). Matches the equivalent
         // manual span in ClientGRPCJob.java on the client side for the same operation.
-        // TELEMETRY COMMENTED OUT - tracing span removed, consumer logic preserved.
-        // Tracer tracer = OpenTelemetryConfig.get().getTracer("uk.gov.dbt.ndtp.federator.server.grpc");
-        // Span span = tracer.spanBuilder("GRPCFederatorService.getKafkaConsumer")
-        //         .setAttribute("messaging.destination.name", request.getTopic())
-        //         .startSpan();
-        try {
+        // makeCurrent() attaches the span to this thread's context so that Span.current() inside
+        // federator.getKafkaConsumer(...) resolves to this span instead of the invalid/root
+        // context - without it, trace_id/span_id/trace_flags are omitted from downstream logs.
+        Tracer tracer = OpenTelemetryConfig.get().getTracer("uk.gov.dbt.ndtp.federator.server.grpc");
+        Span span = tracer.spanBuilder("GRPCFederatorService.getKafkaConsumer")
+                 .setAttribute("messaging.destination.name", request.getTopic())
+                 .startSpan();
+        try (Scope scope = span.makeCurrent()) {
             federator.getKafkaConsumer(request, streamObservable);
         } catch (InvalidTopicException e) {
-            // span.recordException(e);
-            // span.setStatus(StatusCode.ERROR, e.getMessage());
+             span.recordException(e);
+             span.setStatus(StatusCode.ERROR, e.getMessage());
             LOGGER.error("Invalid topic", e);
             responseObserver.onError(
                     Status.INVALID_ARGUMENT.withDescription(e.getMessage()).asRuntimeException());
-        } // finally { span.end(); }
+        }  finally { span.end(); }
     }
 
     @Override
@@ -112,19 +114,21 @@ public class GRPCFederatorService extends FederatorServiceGrpc.FederatorServiceI
         // using GrpcTelemetry's automatic server interceptor: that path throws
         // NoClassDefFoundError: io.opentelemetry.semconv.NetworkAttributes against this
         // project's pinned semconv version (see GRPCServer.java comments) and is disabled.
-        // TELEMETRY COMMENTED OUT - tracing span removed, file consumer logic preserved.
-        // Tracer tracer = OpenTelemetryConfig.get().getTracer("uk.gov.dbt.ndtp.federator.server.grpc");
-        // Span span = tracer.spanBuilder("GRPCFederatorService.getFilesStream")
-        //         .setAttribute("messaging.destination.name", request.getTopic())
-        //         .setAttribute("messaging.kafka.message.offset", request.getStartSequenceId())
-        //         .startSpan();
-        try {
+        // makeCurrent() attaches the span to this thread's context so that Span.current() inside
+        // federator.getFileConsumer(...) resolves to this span instead of the invalid/root
+        // context - without it, trace_id/span_id/trace_flags are omitted from downstream logs.
+         Tracer tracer = OpenTelemetryConfig.get().getTracer("uk.gov.dbt.ndtp.federator.server.grpc");
+         Span span = tracer.spanBuilder("GRPCFederatorService.getFilesStream")
+                 .setAttribute("messaging.destination.name", request.getTopic())
+                 .setAttribute("messaging.kafka.message.offset", request.getStartSequenceId())
+                 .startSpan();
+        try (Scope scope = span.makeCurrent()) {
             federator.getFileConsumer(request, streamObservable);
         } catch (Exception e) {
-            // span.recordException(e);
-            // span.setStatus(StatusCode.ERROR, e.getMessage());
+             span.recordException(e);
+             span.setStatus(StatusCode.ERROR, e.getMessage());
             throw e;
-        } // finally { span.end(); }
+        }  finally { span.end(); }
     }
 
     @ExcludeFromJacocoGeneratedReport
