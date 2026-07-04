@@ -29,8 +29,7 @@ package uk.gov.dbt.ndtp.federator.server.grpc;
 import static uk.gov.dbt.ndtp.federator.common.utils.GRPCUtils.*;
 
 import io.grpc.*;
-
-
+import io.opentelemetry.instrumentation.grpc.v1_6.GrpcTelemetry;
 import java.io.IOException;
 import java.util.Properties;
 import java.util.Set;
@@ -44,7 +43,7 @@ import uk.gov.dbt.ndtp.federator.common.annotations.ExcludeFromJacocoGeneratedRe
 import uk.gov.dbt.ndtp.federator.common.service.idp.IdpTokenService;
 import uk.gov.dbt.ndtp.federator.common.service.ocsp.OcspCertificateVerificationService;
 import uk.gov.dbt.ndtp.federator.common.service.ocsp.OcspCertificateVerificationServiceImpl;
-// import uk.gov.dbt.ndtp.federator.common.telemetry.OpenTelemetryConfig;
+import uk.gov.dbt.ndtp.federator.common.telemetry.OpenTelemetryConfig;
 import uk.gov.dbt.ndtp.federator.common.utils.GRPCUtils;
 import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
 import uk.gov.dbt.ndtp.federator.common.utils.SSLUtils;
@@ -142,7 +141,7 @@ public class GRPCServer implements AutoCloseable {
         // DSI EDIT: GrpcTelemetry creates a real OTel span per incoming call and extracts the
         // W3C trace context the federator client sent. Registered outermost so a span exists
         // even if auth later rejects the call.
-        // GrpcTelemetry grpcTelemetry = GrpcTelemetry.create(OpenTelemetryConfig.get()); // DISABLED: NoClassDefFoundError NetworkAttributes
+       //  GrpcTelemetry grpcTelemetry = GrpcTelemetry.create(OpenTelemetryConfig.get()); // DISABLED: NoClassDefFoundError NetworkAttributes
         return builder.executor(ThreadUtil.threadExecutor(GRPC_SERVER))
                 .keepAliveTime(PropertyUtil.getPropertyIntValue(SERVER_KEEP_ALIVE_TIME, FIVE), TimeUnit.SECONDS)
                 .keepAliveTimeout(PropertyUtil.getPropertyIntValue(SERVER_KEEP_ALIVE_TIMEOUT, ONE), TimeUnit.SECONDS)
@@ -152,7 +151,6 @@ public class GRPCServer implements AutoCloseable {
                         (ServerInterceptor) new AuthServerInterceptor(tokenService),
                         (ServerInterceptor) new CustomServerInterceptor(),
                         (ServerInterceptor) new OcspServerInterceptor(tokenService,ocspService)));
-
 
     }
 

@@ -203,13 +203,13 @@ class ManagementNodeIntegrationTest {
         // avoid "OpenTelemetryConfig.initialize() must be called before OpenTelemetryConfig.get()".
         // TELEMETRY COMMENTED OUT - OpenTelemetryConfig mock removed; job.run() no longer
         // requires an initialised OpenTelemetry SDK.
-        // try (org.mockito.MockedStatic<uk.gov.dbt.ndtp.federator.common.telemetry.OpenTelemetryConfig> otelMock =
-        //         org.mockito.Mockito.mockStatic(
-        //                 uk.gov.dbt.ndtp.federator.common.telemetry.OpenTelemetryConfig.class)) {
-        //     otelMock.when(uk.gov.dbt.ndtp.federator.common.telemetry.OpenTelemetryConfig::get)
-        //             .thenReturn(io.opentelemetry.api.OpenTelemetry.noop());
+         try (org.mockito.MockedStatic<uk.gov.dbt.ndtp.federator.common.telemetry.OpenTelemetryConfig> otelMock =
+                 org.mockito.Mockito.mockStatic(
+                         uk.gov.dbt.ndtp.federator.common.telemetry.OpenTelemetryConfig.class)) {
+             otelMock.when(uk.gov.dbt.ndtp.federator.common.telemetry.OpenTelemetryConfig::get)
+                   .thenReturn(io.opentelemetry.api.OpenTelemetry.noop());
         job.run(createJobParams());
-        // }
+         }
         latch.countDown();
 
         assertTrue(latch.await(TIMEOUT, TimeUnit.SECONDS));
