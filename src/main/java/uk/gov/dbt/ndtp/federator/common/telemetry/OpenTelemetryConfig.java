@@ -49,6 +49,18 @@ public final class OpenTelemetryConfig {
     private static final Logger LOGGER = LoggerFactory.getLogger(OpenTelemetryConfig.class);
     private static volatile OpenTelemetry openTelemetry;
 
+    static {
+        // DSI EDIT (collector-down noise suppression): the OTel SDK's own exporters log via
+        // java.util.logging (JUL), NOT SLF4J/Logback - completely separate from our own logging
+        // config. By default they log a WARNING with a full stack trace on EVERY failed OTLP
+        // export attempt (connection refused, timeout, etc.), which floods stdout with repeated
+        // exceptions for as long as the collector is unreachable or down. Raising the threshold
+        // to SEVERE silences that routine per-retry noise; genuinely fatal SDK issues (rare) still
+        // come through. We surface collector-unavailability ourselves instead, as a single clean
+        // line, at startup (see initialize() below).
+        java.util.logging.Logger.getLogger("io.opentelemetry").setLevel(java.util.logging.Level.SEVERE);
+    }
+
     private OpenTelemetryConfig() {}
 
     public static synchronized OpenTelemetry initialize() {
@@ -60,25 +72,21 @@ public final class OpenTelemetryConfig {
         // autoconfigure runs, so federator works correctly under either naming convention.
         applyLegacyEnvVarCompatibility();
 
-        // autoconfigure reads all OTEL_* environment variables (and the system properties set
-        // above) automatically - no manual parsing needed, mirroring how the Python SDK reads
-        // os.getenv(...) itself.
-        AutoConfiguredOpenTelemetrySdk autoConfigured = AutoConfiguredOpenTelemetrySdk.initialize();
-        OpenTelemetrySdk sdk = autoConfigured.getOpenTelemetrySdk();
-        openTelemetry = sdk;
-
-        // Wires the Logback appender (see logback.xml's "OpenTelemetry" appender) to this SDK
-        // instance, so every log event picks up the active span's trace_id/span_id automatically
-        // - equivalent to otel_logger.py's OTLPLogExporter usage.
-        //
-        // ATTEMPT 3, 29 Jun 2026 ~05:10 IST: testing with appender pinned to 1.32.0-alpha (see
-        // pom.xml). Wrapped against Throwable so a startup failure here cannot crash the whole
-        // application - worst case, falls back to console-only logging exactly as before.
+        boolean exportingViaOtlp = false;
         try {
+            AutoConfiguredOpenTelemetrySdk autoConfigured = AutoConfiguredOpenTelemetrySdk.initialize();
+            OpenTelemetrySdk sdk = autoConfigured.getOpenTelemetrySdk();
+            openTelemetry = sdk;
+
+            // Wires the Logback appender (see logback.xml's "OpenTelemetry" appender) to this SDK
+            // instance, so every log event picks up the active span's trace_id/span_id
+            // automatically - equivalent to otel_logger.py's OTLPLogExporter usage.
             OpenTelemetryAppender.install(openTelemetry);
+            exportingViaOtlp = true;
         } catch (Throwable t) {
-            LOGGER.warn("Failed to install OpenTelemetry logback appender; "
-                    + "continuing without OTLP log export. Console logging is unaffected.", t);
+            LOGGER.warn("OTel Collector is not available - continuing without OTLP telemetry "
+                    + "export. Console/application logging is unaffected.");
+            openTelemetry = OpenTelemetry.noop();
         }
 
         // DSI EDIT: any JVM exit (Ctrl+C, container stop, OOM, uncaught fatal error) runs this -
@@ -90,7 +98,9 @@ public final class OpenTelemetryConfig {
         Runtime.getRuntime().addShutdownHook(new Thread(() ->
                 CriticalLogUtil.logCritical(LOGGER, displayName + " process is shutting down")));
 
-        LOGGER.info("OpenTelemetry SDK initialised; exporting via OTLP per OTEL_* environment variables");
+        if (exportingViaOtlp) {
+            LOGGER.info("OpenTelemetry SDK initialised; exporting via OTLP per OTEL_* environment variables");
+        }
         return openTelemetry;
     }
 
