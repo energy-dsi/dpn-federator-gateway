@@ -111,31 +111,31 @@ public class GRPCServer implements AutoCloseable {
         IdpTokenService tokenService = GRPCUtils.createIdpTokenService();
         Properties commonProperties = PropertyUtil.getPropertiesFromFilePath(COMMON_CONFIG_PROPERTIES);
 
-        //Since the server properties are already loaded via PropertyUtil.init() at startup,
-        // reading individual values directly.
-        //Replace this in GRPCServer.configureServerBuilder():
-        commonProperties.setProperty("idp.client.id","management-node");
-        commonProperties.setProperty("idp.client.secret","OXhz7wsXnLtINuamWJySEcVVN4zhSAdQ");
-        Properties serverProps = new Properties();
-        serverProps.setProperty("idp.client.id","management-node");
-        serverProps.setProperty("idp.client.secret","OXhz7wsXnLtINuamWJySEcVVN4zhSAdQ");
-//        serverProps.setProperty("client.p12FilePath",
-//                PropertyUtil.getPropertyValue("client.p12FilePath"));
-//        serverProps.setProperty("client.p12Password",
-//                PropertyUtil.getPropertyValue("client.p12Password"));
-        serverProps.setProperty("client.truststoreFilePath",
-                PropertyUtil.getPropertyValue("server.truststoreFilePath"));
-        serverProps.setProperty("client.truststorePassword",
-                PropertyUtil.getPropertyValue("server.truststorePassword"));
-        serverProps.setProperty("management.node.base.url",
-                PropertyUtil.getPropertyValue("management.node.base.url"));
-        serverProps.setProperty("ocsp.cache.ttl.seconds",
-                PropertyUtil.getPropertyValue("ocsp.cache.ttl.seconds", "300"));
-
-        IdpTokenService idpTokenService = GRPCUtils.createIdpTokenService();
+//        //Since the server properties are already loaded via PropertyUtil.init() at startup,
+//        // reading individual values directly.
+//        //Replace this in GRPCServer.configureServerBuilder():
+//        commonProperties.setProperty("idp.client.id","management-node");
+//        commonProperties.setProperty("idp.client.secret","OXhz7wsXnLtINuamWJySEcVVN4zhSAdQ");
+//        Properties serverProps = new Properties();
+//        serverProps.setProperty("idp.client.id","management-node");
+//        serverProps.setProperty("idp.client.secret","OXhz7wsXnLtINuamWJySEcVVN4zhSAdQ");
+////        serverProps.setProperty("client.p12FilePath",
+////                PropertyUtil.getPropertyValue("client.p12FilePath"));
+////        serverProps.setProperty("client.p12Password",
+////                PropertyUtil.getPropertyValue("client.p12Password"));
+//        serverProps.setProperty("client.truststoreFilePath",
+//                PropertyUtil.getPropertyValue("server.truststoreFilePath"));
+//        serverProps.setProperty("client.truststorePassword",
+//                PropertyUtil.getPropertyValue("server.truststorePassword"));
+//        serverProps.setProperty("management.node.base.url",
+//                PropertyUtil.getPropertyValue("management.node.base.url"));
+//        serverProps.setProperty("ocsp.cache.ttl.seconds",
+//                PropertyUtil.getPropertyValue("ocsp.cache.ttl.seconds", "300"));
+//
+//        IdpTokenService idpTokenService = GRPCUtils.createIdpTokenService();
 
         OcspCertificateVerificationService ocspService =
-                new OcspCertificateVerificationServiceImpl(serverProps, idpTokenService);
+                new OcspCertificateVerificationServiceImpl(commonProperties, tokenService);
 
         ServerServiceDefinition serviceDef = new GRPCFederatorService(sharedHeaders).bindService();
         // DSI EDIT: GrpcTelemetry creates a real OTel span per incoming call and extracts the

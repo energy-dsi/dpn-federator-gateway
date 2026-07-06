@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import uk.gov.dbt.ndtp.federator.common.service.idp.IdpTokenService;
+import uk.gov.dbt.ndtp.federator.common.utils.HttpClientFactoryUtils;
+import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
 import uk.gov.dbt.ndtp.federator.common.utils.SSLUtils;
 import uk.gov.dbt.ndtp.federator.exceptions.OcspVerificationException;
 
@@ -21,6 +23,7 @@ public class OcspCertificateVerificationServiceImpl
         implements OcspCertificateVerificationService {
 
 
+    private static String MANAGEMENT_NODE_BASE_URL_KEY = "management.node.base.url";
 
 
     private final String managementNodeBaseUrl;
@@ -29,22 +32,13 @@ public class OcspCertificateVerificationServiceImpl
     private final IdpTokenService idpTokenService;
 
     public OcspCertificateVerificationServiceImpl(
-            Properties clientProps, IdpTokenService idpTokenService) {
+            Properties properties, IdpTokenService idpTokenService) {
 
-        this.managementNodeBaseUrl = clientProps.getProperty("management.node.base.url");
+        this.managementNodeBaseUrl = PropertyUtil.getPropertyValue(MANAGEMENT_NODE_BASE_URL_KEY);
         this.idpTokenService = idpTokenService;
         this.otelLogger = new OtelCertificateVerificationLogger();
-        SSLContext sslContext = SSLUtils.createSSLContext(
-                clientProps.getProperty("client.keystoreFilePath"),
-                clientProps.getProperty("client.keystorePassword"),
-                clientProps.getProperty("client.truststoreFilePath"),
-                clientProps.getProperty("client.truststorePassword"));
 
-        this.httpClient = HttpClient.newBuilder()
-                .version(HttpClient.Version.HTTP_1_1)
-                .connectTimeout(Duration.ofSeconds(5))
-                .sslContext(sslContext)
-                .build();
+        this.httpClient = HttpClientFactoryUtils.createHttpClientWithMtls(properties);
     }
     @Override
 
