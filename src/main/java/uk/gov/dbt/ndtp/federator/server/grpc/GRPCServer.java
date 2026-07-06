@@ -43,6 +43,7 @@ import uk.gov.dbt.ndtp.federator.common.annotations.ExcludeFromJacocoGeneratedRe
 import uk.gov.dbt.ndtp.federator.common.service.idp.IdpTokenService;
 import uk.gov.dbt.ndtp.federator.common.service.ocsp.OcspCertificateVerificationService;
 import uk.gov.dbt.ndtp.federator.common.service.ocsp.OcspCertificateVerificationServiceImpl;
+import uk.gov.dbt.ndtp.federator.common.service.secret.SecretProvider;
 import uk.gov.dbt.ndtp.federator.common.telemetry.OpenTelemetryConfig;
 import uk.gov.dbt.ndtp.federator.common.utils.GRPCUtils;
 import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
@@ -111,31 +112,34 @@ public class GRPCServer implements AutoCloseable {
         IdpTokenService tokenService = GRPCUtils.createIdpTokenService();
         Properties commonProperties = PropertyUtil.getPropertiesFromFilePath(COMMON_CONFIG_PROPERTIES);
 
-        //Since the server properties are already loaded via PropertyUtil.init() at startup,
-        // reading individual values directly.
-        //Replace this in GRPCServer.configureServerBuilder():
-        commonProperties.setProperty("idp.client.id","management-node");
-        commonProperties.setProperty("idp.client.secret","OXhz7wsXnLtINuamWJySEcVVN4zhSAdQ");
-        Properties serverProps = new Properties();
-        serverProps.setProperty("idp.client.id","management-node");
-        serverProps.setProperty("idp.client.secret","OXhz7wsXnLtINuamWJySEcVVN4zhSAdQ");
-//        serverProps.setProperty("client.p12FilePath",
-//                PropertyUtil.getPropertyValue("client.p12FilePath"));
-//        serverProps.setProperty("client.p12Password",
-//                PropertyUtil.getPropertyValue("client.p12Password"));
-        serverProps.setProperty("client.truststoreFilePath",
-                PropertyUtil.getPropertyValue("server.truststoreFilePath"));
-        serverProps.setProperty("client.truststorePassword",
-                PropertyUtil.getPropertyValue("server.truststorePassword"));
-        serverProps.setProperty("management.node.base.url",
-                PropertyUtil.getPropertyValue("management.node.base.url"));
-        serverProps.setProperty("ocsp.cache.ttl.seconds",
-                PropertyUtil.getPropertyValue("ocsp.cache.ttl.seconds", "300"));
+//        //Since the server properties are already loaded via PropertyUtil.init() at startup,
+//        // reading individual values directly.
+//        //Replace this in GRPCServer.configureServerBuilder():
+//        commonProperties.setProperty("idp.client.id","management-node");
+//        commonProperties.setProperty("idp.client.secret","OXhz7wsXnLtINuamWJySEcVVN4zhSAdQ");
+//        Properties serverProps = new Properties();
+//        serverProps.setProperty("idp.client.id","management-node");
+//        serverProps.setProperty("idp.client.secret","OXhz7wsXnLtINuamWJySEcVVN4zhSAdQ");
+////        serverProps.setProperty("client.p12FilePath",
+////                PropertyUtil.getPropertyValue("client.p12FilePath"));
+////        serverProps.setProperty("client.p12Password",
+////                PropertyUtil.getPropertyValue("client.p12Password"));
+//        serverProps.setProperty("client.truststoreFilePath",
+//                PropertyUtil.getPropertyValue("server.truststoreFilePath"));
+//        serverProps.setProperty("client.truststorePassword",
+//                PropertyUtil.getPropertyValue("server.truststorePassword"));
+//        serverProps.setProperty("management.node.base.url",
+//                PropertyUtil.getPropertyValue("management.node.base.url"));
+//        serverProps.setProperty("ocsp.cache.ttl.seconds",
+//                PropertyUtil.getPropertyValue("ocsp.cache.ttl.seconds", "300"));
+//
+//        IdpTokenService idpTokenService = GRPCUtils.createIdpTokenService();
 
-        IdpTokenService idpTokenService = GRPCUtils.createIdpTokenService();
+        SecretProvider secretProvider = PropertyUtil.createSecretProvider(commonProperties);
+        PropertyUtil.overrideWithSecrets(commonProperties, secretProvider);
 
         OcspCertificateVerificationService ocspService =
-                new OcspCertificateVerificationServiceImpl(serverProps, idpTokenService);
+                new OcspCertificateVerificationServiceImpl(commonProperties, tokenService);
 
         ServerServiceDefinition serviceDef = new GRPCFederatorService(sharedHeaders).bindService();
         // DSI EDIT: GrpcTelemetry creates a real OTel span per incoming call and extracts the

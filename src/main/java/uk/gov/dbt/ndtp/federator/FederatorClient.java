@@ -283,22 +283,26 @@ public class FederatorClient {
         }
     }
     private static OcspCertificateVerificationService createOcspService() {
-        Properties clientProps = new Properties();
-        clientProps.setProperty("client.p12FilePath",
-                PropertyUtil.getPropertyValue("client.p12FilePath"));
-        clientProps.setProperty("client.p12Password",
-                PropertyUtil.getPropertyValue("client.p12Password"));
-        clientProps.setProperty("client.truststoreFilePath",
-                PropertyUtil.getPropertyValue("client.truststoreFilePath"));
-        clientProps.setProperty("client.truststorePassword",
-                PropertyUtil.getPropertyValue("client.truststorePassword"));
-        clientProps.setProperty("management.node.base.url",
-                PropertyUtil.getPropertyValue("management.node.base.url"));
-        clientProps.setProperty("ocsp.cache.ttl.seconds",
-                PropertyUtil.getPropertyValue("ocsp.cache.ttl.seconds", "300"));
+//        Properties clientProps = new Properties();
+//        clientProps.setProperty("client.p12FilePath",
+//                PropertyUtil.getPropertyValue("client.p12FilePath"));
+//        clientProps.setProperty("client.p12Password",
+//                PropertyUtil.getPropertyValue("client.p12Password"));
+//        clientProps.setProperty("client.truststoreFilePath",
+//                PropertyUtil.getPropertyValue("client.truststoreFilePath"));
+//        clientProps.setProperty("client.truststorePassword",
+//                PropertyUtil.getPropertyValue("client.truststorePassword"));
+//        clientProps.setProperty("management.node.base.url",
+//                PropertyUtil.getPropertyValue("management.node.base.url"));
+//        clientProps.setProperty("ocsp.cache.ttl.seconds",
+//                PropertyUtil.getPropertyValue("ocsp.cache.ttl.seconds", "300"));
 
+        Properties properties = PropertyUtil.getPropertiesFromFilePath(GRPCUtils.COMMON_CONFIG_PROPERTIES);
+
+        SecretProvider secretProvider = PropertyUtil.createSecretProvider(properties);
+        PropertyUtil.overrideWithSecrets(properties, secretProvider);
 
         IdpTokenService idpTokenService = GRPCUtils.createIdpTokenService();
-        return new OcspCertificateVerificationServiceImpl(clientProps, idpTokenService);
+        return new OcspCertificateVerificationServiceImpl(properties, idpTokenService);
     }
 }
