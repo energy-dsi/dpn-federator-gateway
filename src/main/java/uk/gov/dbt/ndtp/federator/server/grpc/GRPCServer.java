@@ -43,6 +43,7 @@ import uk.gov.dbt.ndtp.federator.common.annotations.ExcludeFromJacocoGeneratedRe
 import uk.gov.dbt.ndtp.federator.common.service.idp.IdpTokenService;
 import uk.gov.dbt.ndtp.federator.common.service.ocsp.OcspCertificateVerificationService;
 import uk.gov.dbt.ndtp.federator.common.service.ocsp.OcspCertificateVerificationServiceImpl;
+import uk.gov.dbt.ndtp.federator.common.service.secret.SecretProvider;
 import uk.gov.dbt.ndtp.federator.common.telemetry.OpenTelemetryConfig;
 import uk.gov.dbt.ndtp.federator.common.utils.GRPCUtils;
 import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
@@ -133,6 +134,9 @@ public class GRPCServer implements AutoCloseable {
 //                PropertyUtil.getPropertyValue("ocsp.cache.ttl.seconds", "300"));
 //
 //        IdpTokenService idpTokenService = GRPCUtils.createIdpTokenService();
+
+        SecretProvider secretProvider = PropertyUtil.createSecretProvider(commonProperties);
+        PropertyUtil.overrideWithSecrets(commonProperties, secretProvider);
 
         OcspCertificateVerificationService ocspService =
                 new OcspCertificateVerificationServiceImpl(commonProperties, tokenService);
