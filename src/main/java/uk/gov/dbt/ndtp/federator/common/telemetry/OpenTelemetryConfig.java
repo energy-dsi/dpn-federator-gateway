@@ -52,13 +52,18 @@ public final class OpenTelemetryConfig {
     static {
         // DSI EDIT (collector-down noise suppression): the OTel SDK's own exporters log via
         // java.util.logging (JUL), NOT SLF4J/Logback - completely separate from our own logging
-        // config. By default they log a WARNING with a full stack trace on EVERY failed OTLP
-        // export attempt (connection refused, timeout, etc.), which floods stdout with repeated
-        // exceptions for as long as the collector is unreachable or down. Raising the threshold
-        // to SEVERE silences that routine per-retry noise; genuinely fatal SDK issues (rare) still
-        // come through. We surface collector-unavailability ourselves instead, as a single clean
-        // line, at startup (see initialize() below).
-        java.util.logging.Logger.getLogger("io.opentelemetry").setLevel(java.util.logging.Level.SEVERE);
+        // config. ThrottlingLogger logs export failures (collector unreachable, DNS failure,
+        // connection refused, timeout, etc.) at SEVERE with the full exception + stack trace on
+        // every failed OTLP export attempt. Replace the default console handler on this logger
+        // with CollectorUnavailableLogHandler, which swallows the stack trace and emits a single
+        // short application-level message via SLF4J instead.
+        java.util.logging.Logger otelJulLogger = java.util.logging.Logger.getLogger("io.opentelemetry");
+        otelJulLogger.setUseParentHandlers(false);
+        for (java.util.logging.Handler existing : otelJulLogger.getHandlers()) {
+            otelJulLogger.removeHandler(existing);
+        }
+        otelJulLogger.addHandler(new CollectorUnavailableLogHandler());
+        otelJulLogger.setLevel(java.util.logging.Level.ALL);
     }
 
     private OpenTelemetryConfig() {}

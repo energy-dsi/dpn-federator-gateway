@@ -134,7 +134,11 @@ public final class HeartbeatService {
             }
             event.log("Heartbeat: {} is {}", componentName, status);
         } catch (Exception e) {
-            logger.warn("Heartbeat emit failed", e); // never let a beat kill the scheduler
+            logger.atWarn()
+                    .addKeyValue("component.name", componentName)
+                    .addKeyValue("error.type", e.getClass().getSimpleName())
+                    .addKeyValue("error.message", e.getMessage())
+                    .log("Heartbeat emit failed for {}"); // never let a beat kill the scheduler
         }
     }
 
