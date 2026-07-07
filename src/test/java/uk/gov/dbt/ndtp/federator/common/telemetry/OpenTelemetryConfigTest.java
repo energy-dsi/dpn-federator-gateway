@@ -5,6 +5,7 @@ package uk.gov.dbt.ndtp.federator.common.telemetry;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -23,13 +24,13 @@ import org.junit.jupiter.api.Test;
  * <p>{@code openTelemetry} is a static singleton field with an early-return once set, so tests
  * reset it via reflection in {@link #resetStaticState()} to avoid ordering-dependent failures.
  *
- * <p>Two branches of {@link OpenTelemetryConfig#applyLegacyEnvVarCompatibility()} read
- * System.getenv(...) directly (SERVICE_NAME / SERVICE_VERSION / ENVIRONMENT / OTEL_SERVICE_NAME /
- * OTEL_RESOURCE_ATTRIBUTES), which plain JUnit can't mock. This project doesn't currently depend
- * on an env-var-mocking library (e.g. junit-pioneer's {@code @SetEnvironmentVariable} /
- * {@code @ClearEnvironmentVariable}); adding one is the direct way to also cover the legacy
- * SERVICE_NAME-translation branches and the OTEL_SERVICE_NAME/OTEL_RESOURCE_ATTRIBUTES branches of
- * resolveComponentName(). Everything reachable via system properties is covered below.
+ * <p>{@link OpenTelemetryConfig#applyLegacyEnvVarCompatibility()} reads System.getenv(...)
+ * directly. Without changing production code, its translation branches (SERVICE_NAME,
+ * SERVICE_VERSION, ENVIRONMENT) can't be exercised with specific fake values here - Mockito
+ * refuses to mock {@code System.class} outright, and mutating real env vars needs junit-pioneer
+ * plus {@code --add-opens java.base/java.lang=ALL-UNNAMED} on the test JVM. Only the "no legacy
+ * vars set" no-op path is covered below, via reflection on the real private method, guarded by
+ * {@code assumeTrue} against the actual running environment.
  */
 class OpenTelemetryConfigTest {
 
@@ -149,5 +150,40 @@ class OpenTelemetryConfigTest {
         assumeTrue(System.getenv("OTEL_RESOURCE_ATTRIBUTES") == null, "OTEL_RESOURCE_ATTRIBUTES set in env");
 
         assertEquals("dpn-federator-gateway", invokeResolveComponentName());
+    }
+
+    // --- applyLegacyEnvVarCompatibility() -----------------------------------------------------
+    // This method reads System.getenv(...) directly. Without changing OpenTelemetryConfig.java,
+    // there is no way to control what it returns: Mockito refuses to mock java.lang.System
+    // outright ("It is not possible to mock static methods of java.lang.System"), and mutating
+    // real env vars (junit-pioneer, System Rules, etc.) needs the test JVM launched with
+    // --add-opens java.base/java.lang=ALL-UNNAMED, which this project is avoiding. So the only
+    // honest test achievable here, without touching production code or JVM args, is invoking the
+    // real method via reflection and asserting against whatever the actual environment is - this
+    // only exercises the "no legacy vars set" no-op path, guarded by assumeTrue so it skips
+    // rather than gives a false result if your environment happens to set these.
+    //
+    // To properly cover the SERVICE_NAME/SERVICE_VERSION/ENVIRONMENT translation branches, one of
+    // the following would be required: (a) extract the env lookup into an injectable parameter
+    // in OpenTelemetryConfig.java, (b) add junit-pioneer + --add-opens on the test JVM, or (c)
+    // add a legacy-style env-mocking library. All three were ruled out per your last two
+    // requests, so those branches are left uncovered here.
+
+    @Test
+    void applyLegacyEnvVarCompatibility_isNoOpWhenNoLegacyVarsSetInRealEnvironment() throws Exception {
+        assumeTrue(System.getenv("SERVICE_NAME") == null, "SERVICE_NAME set in real environment");
+        assumeTrue(System.getenv("SERVICE_VERSION") == null, "SERVICE_VERSION set in real environment");
+        assumeTrue(System.getenv("ENVIRONMENT") == null, "ENVIRONMENT set in real environment");
+
+        invokeApplyLegacyEnvVarCompatibility();
+
+        assertNull(System.getProperty("otel.service.name"));
+        assertNull(System.getProperty("otel.resource.attributes"));
+    }
+
+    private static void invokeApplyLegacyEnvVarCompatibility() throws Exception {
+        Method method = OpenTelemetryConfig.class.getDeclaredMethod("applyLegacyEnvVarCompatibility");
+        method.setAccessible(true);
+        method.invoke(null);
     }
 }
