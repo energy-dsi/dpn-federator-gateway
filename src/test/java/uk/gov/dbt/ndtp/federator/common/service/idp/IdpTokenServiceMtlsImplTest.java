@@ -17,6 +17,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.Map;
 import java.util.Properties;
+import java.util.function.Supplier;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -74,7 +75,8 @@ class IdpTokenServiceMtlsImplTest {
     void fetchToken_returnsCachedToken() {
         when(redisUtil.getValue(anyString(), eq(String.class), eq(true))).thenReturn("cached-token");
 
-        IdpTokenServiceMtlsImpl service = new IdpTokenServiceMtlsImpl(httpClient, objectMapper);
+        IdpTokenServiceMtlsImpl service =
+                new IdpTokenServiceMtlsImpl((Supplier<HttpClient>) () -> httpClient, objectMapper);
         String token = service.fetchToken("node-1");
 
         assertEquals("cached-token", token);
@@ -92,7 +94,7 @@ class IdpTokenServiceMtlsImplTest {
         when(objectMapper.readValue(anyString(), any(TypeReference.class)))
                 .thenReturn(Map.of("access_token", "new-token", "expires_in", 3600));
 
-        IdpTokenServiceMtlsImpl service = new IdpTokenServiceMtlsImpl(httpClient, objectMapper);
+        IdpTokenServiceMtlsImpl service = new IdpTokenServiceMtlsImpl(() -> httpClient, objectMapper);
         String token = service.fetchToken("node-1");
 
         assertEquals("new-token", token);
@@ -108,7 +110,7 @@ class IdpTokenServiceMtlsImplTest {
         when(httpClient.send(any(HttpRequest.class), any(HttpResponse.BodyHandler.class)))
                 .thenReturn(response);
 
-        IdpTokenServiceMtlsImpl service = new IdpTokenServiceMtlsImpl(httpClient, objectMapper);
+        IdpTokenServiceMtlsImpl service = new IdpTokenServiceMtlsImpl(() -> httpClient, objectMapper);
         assertThrows(FederatorTokenException.class, () -> service.fetchToken("node-1"));
     }
 
@@ -123,7 +125,7 @@ class IdpTokenServiceMtlsImplTest {
         when(objectMapper.readValue(anyString(), any(TypeReference.class)))
                 .thenReturn(Map.of("access_token", "default-token", "expires_in", 3600));
 
-        IdpTokenServiceMtlsImpl service = new IdpTokenServiceMtlsImpl(httpClient, objectMapper);
+        IdpTokenServiceMtlsImpl service = new IdpTokenServiceMtlsImpl(() -> httpClient, objectMapper);
         String token = service.fetchToken(null);
 
         assertEquals("default-token", token);
@@ -137,7 +139,7 @@ class IdpTokenServiceMtlsImplTest {
         // Actually fetchTokenWithResilience in AbstractIdpTokenService calls fetchToken(null)
 
         when(redisUtil.getValue(anyString(), eq(String.class), eq(true))).thenReturn("resilient-token");
-        IdpTokenServiceMtlsImpl service = new IdpTokenServiceMtlsImpl(httpClient, objectMapper);
+        IdpTokenServiceMtlsImpl service = new IdpTokenServiceMtlsImpl(() -> httpClient, objectMapper);
         String token = service.fetchToken();
         assertEquals("resilient-token", token);
     }

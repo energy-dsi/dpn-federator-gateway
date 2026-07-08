@@ -267,7 +267,7 @@ class ManagementNodeIntegrationTest {
                 HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
 
         final IdpTokenService tokenService = createTokenService();
-        final ManagementNodeDataHandler handler = new ManagementNodeDataHandler(httpClient, mapper, tokenService);
+        final ManagementNodeDataHandler handler = new ManagementNodeDataHandler(() -> httpClient, mapper, tokenService);
 
         // create separate services for producer and consumer configs
         producerConfigService = new ProducerConfigService(handler, InMemoryConfigurationStore.getInstance());

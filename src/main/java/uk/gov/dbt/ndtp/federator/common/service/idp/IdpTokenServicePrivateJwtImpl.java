@@ -11,13 +11,11 @@ import com.nimbusds.jose.JWSHeader;
 import com.nimbusds.jose.JWSSigner;
 import com.nimbusds.jose.crypto.ECDSASigner;
 import com.nimbusds.jose.crypto.RSASSASigner;
-import com.nimbusds.jose.jwk.RSAKey;
 import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.SignedJWT;
 import java.io.FileInputStream;
 import java.net.URI;
 import java.net.URLEncoder;
-import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
@@ -30,10 +28,9 @@ import java.security.interfaces.ECPrivateKey;
 import java.security.interfaces.RSAPrivateKey;
 import java.time.Instant;
 import java.util.*;
-
+import java.util.function.Supplier;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
-import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
 import uk.gov.dbt.ndtp.federator.common.utils.RedisUtil;
 import uk.gov.dbt.ndtp.federator.exceptions.FederatorTokenException;
 
@@ -93,35 +90,30 @@ public class IdpTokenServicePrivateJwtImpl extends AbstractIdpTokenService {
 
     private final String       idpTokenUrl;
     private final String       idpClientId;
-    private final PrivateKey   privateKey;
     private final JWSAlgorithm jwsAlgorithm;
 
     /**
-     * The kid derived from the keystore's leaf certificate SHA-256 thumbprint.
-     * Computed once at startup; always matches what Keycloak stored when the cert was uploaded.
+     * Properties retained so that {@link #buildClientAssertion()} can reload the keystore
+     * on every call, picking up rotated certificates without a process restart.
      */
-    private final String keyId;
+    private final Properties keystoreProperties;
 
-    public IdpTokenServicePrivateJwtImpl(HttpClient httpClient, ObjectMapper objectMapper, Properties properties) {
+    public IdpTokenServicePrivateJwtImpl(Supplier<java.net.http.HttpClient> httpClientSupplier, ObjectMapper objectMapper, Properties properties) {
         super(
                 properties.getProperty("idp.jwks.url"),
-                httpClient,
+                httpClientSupplier,
                 objectMapper);
 
         this.idpTokenUrl  = properties.getProperty("idp.token.url");
         this.idpClientId  = properties.getProperty("idp.client.id");
         this.jwsAlgorithm = resolveAlgorithm(properties.getProperty("idp.jwt.algorithm", "RS256"));
-
-        // Load private key AND derive kid from the keystore in a single open — most efficient
-        KeystoreContents ks = loadKeystoreContents(properties);
-        this.privateKey = ks.privateKey();
-        this.keyId      = ks.kid();
+        this.keystoreProperties = properties;
 
         validateRequiredConfig();
         log.info(
-                "IdpTokenServicePrivateJwtImpl initialised. tokenUrl='{}', clientId='{}', "
-                        + "kid='{}' (derived from cert in keystore), algorithm='{}'",
-                idpTokenUrl, idpClientId, keyId, jwsAlgorithm);
+                "IdpTokenServicePrivateJwtImpl initialised. tokenUrl='{}', clientId='{}', algorithm='{}'."
+                        + " Keystore will be read on each token request to pick up rotated certificates.",
+                idpTokenUrl, idpClientId, jwsAlgorithm);
     }
 
     // -----------------------------------------------------------------------
@@ -174,7 +166,7 @@ public class IdpTokenServicePrivateJwtImpl extends AbstractIdpTokenService {
                     .build();
 
             log.debug("Requesting token via private_key_jwt from '{}'", idpTokenUrl);
-            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            HttpResponse<String> response = httpClientSupplier.get().send(request, HttpResponse.BodyHandlers.ofString());
 
             if (response.statusCode() != 200) {
                 throw new FederatorTokenException(String.format(
@@ -209,6 +201,12 @@ public class IdpTokenServicePrivateJwtImpl extends AbstractIdpTokenService {
 
     private String buildClientAssertion() {
         try {
+            // Reload keystore on every call so that rotated certificates are picked up
+            // without requiring a process restart.
+            KeystoreContents ks = loadKeystoreContents(keystoreProperties);
+            PrivateKey privateKey = ks.privateKey();
+            String keyId = ks.kid();
+
             Instant now = Instant.now();
             JWTClaimsSet claims = new JWTClaimsSet.Builder()
                     .issuer(idpClientId)
@@ -225,14 +223,16 @@ public class IdpTokenServicePrivateJwtImpl extends AbstractIdpTokenService {
                     .build();
 
             SignedJWT jwt = new SignedJWT(header, claims);
-            jwt.sign(buildSigner());
+            jwt.sign(buildSigner(privateKey));
             return jwt.serialize();
+        } catch (FederatorTokenException e) {
+            throw e;
         } catch (Exception e) {
             throw new FederatorTokenException("Failed to build signed JWT client assertion", e);
         }
     }
 
-    private JWSSigner buildSigner() throws Exception {
+    private JWSSigner buildSigner(PrivateKey privateKey) throws Exception {
         if (privateKey instanceof RSAPrivateKey rsa) {
             return new RSASSASigner(rsa);
         } else if (privateKey instanceof ECPrivateKey ec) {

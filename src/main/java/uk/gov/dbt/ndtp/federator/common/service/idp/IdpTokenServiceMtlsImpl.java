@@ -6,11 +6,11 @@ package uk.gov.dbt.ndtp.federator.common.service.idp;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.URI;
-import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.Map;
 import java.util.Properties;
+import java.util.function.Supplier;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
 import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
@@ -28,18 +28,18 @@ public class IdpTokenServiceMtlsImpl extends AbstractIdpTokenService {
     private static final String MANAGEMENT_NODE_DEFAULT_ID = "default";
     private final String idpTokenUrl;
     private final String idpClientId;
-/****  This is for client secret ****/    
+    /****  This is for client secret ****/
     private final String idpClientSecret;
 
-    public IdpTokenServiceMtlsImpl(HttpClient httpClient, ObjectMapper objectMapper) {
+    public IdpTokenServiceMtlsImpl(Supplier<java.net.http.HttpClient> httpClientSupplier, ObjectMapper objectMapper) {
         super(
                 PropertyUtil.getPropertiesFromFilePath(COMMON_CONFIG_PROPERTIES).getProperty("idp.jwks.url"),
-                httpClient,
+                httpClientSupplier,
                 objectMapper);
         Properties properties = PropertyUtil.getPropertiesFromFilePath(COMMON_CONFIG_PROPERTIES);
         this.idpTokenUrl = properties.getProperty("idp.token.url");
         this.idpClientId = properties.getProperty("idp.client.id");
-/*  This is combined client secret + mTLS */
+        /*  This is combined client secret + mTLS */
         this.idpClientSecret = properties.getProperty("idp.client.secret");
 
 // Validation + log what we can safely show
@@ -103,7 +103,7 @@ public class IdpTokenServiceMtlsImpl extends AbstractIdpTokenService {
                     .build();
             log.debug("attempting to fetch token for management node {}", idpTokenUrl);
 
-            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            HttpResponse<String> response = httpClientSupplier.get().send(request, HttpResponse.BodyHandlers.ofString());
 
             if (response.statusCode() != 200) {
                 throw new FederatorTokenException(String.format(
