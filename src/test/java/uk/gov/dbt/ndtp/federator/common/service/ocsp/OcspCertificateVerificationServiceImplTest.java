@@ -1,24 +1,30 @@
 package uk.gov.dbt.ndtp.federator.common.service.ocsp;
 
-
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.when;
 
-import java.lang.reflect.Field;
+import java.io.File;
+import java.io.FileWriter;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.Optional;
 import java.util.Properties;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
+import org.mockito.MockedStatic;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import uk.gov.dbt.ndtp.federator.common.service.idp.IdpTokenService;
+import uk.gov.dbt.ndtp.federator.common.utils.HttpClientFactoryUtils;
+import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
 
 /**
  * Unit tests for {@link OcspCertificateVerificationServiceImpl}.
@@ -27,24 +33,28 @@ import uk.gov.dbt.ndtp.federator.common.service.idp.IdpTokenService;
  * NOT_FOUND — and confirms it never throws to the caller regardless of what goes wrong
  * (HTTP error, network failure, malformed JSON), always returning a status instead.
  *
- * <p>Since {@link OcspCertificateVerificationServiceImpl} builds a real {@link HttpClient}
- * internally with no constructor seam for injection, these tests replace it via reflection
- * after construction so the underlying network call can be mocked. The truststore/SSL
- * context setup in the constructor still runs against real file paths — tests therefore
- * point {@code client.truststoreFilePath} at a real, valid truststore on the test classpath.
- * If no such file is available in this module's test resources, the constructor will throw;
- * see the {@code TEST_TRUSTSTORE_PATH} constant below and adjust to a real file in your
- * test resources directory.
+ * <p>DSI EDIT (coverage fix): this entire class body was previously wrapped in a block comment -
+ * none of these 12 tests ever compiled or ran, which is why this package showed ~2%/0% coverage
+ * despite substantial test code existing. Also fixed two real setup problems once uncommented:
+ * <ul>
+ *   <li>The constructor reads {@code management.node.base.url} via the static
+ *   {@link PropertyUtil} singleton, NOT from the {@code Properties} object passed into the
+ *   constructor (that object is only used later, for {@code HttpClientFactoryUtils}). PropertyUtil
+ *   must be explicitly initialised first via {@link PropertyUtil#init(File)}, the same pattern
+ *   {@code ManagementNodeIntegrationTest} already uses elsewhere in this codebase - otherwise
+ *   every test fails at setUp with "PropertyUtil not properly initialised".</li>
+ *   <li>Rather than requiring a real keystore/truststore on disk (the original approach), the
+ *   constructor's real HttpClient-building call -
+ *   {@link HttpClientFactoryUtils#createHttpClientWithMtls(Properties)} - is mocked via
+ *   {@code Mockito.mockStatic(...)} for the duration of construction, so no TLS material or
+ *   filesystem access is needed at all.</li>
+ * </ul>
  */
 @ExtendWith(MockitoExtension.class)
 class OcspCertificateVerificationServiceImplTest {
-/*
+
     private static final String CLIENT_ID = "FEDERATOR_ENV";
     private static final String BASE_URL = "https://localhost:8090";
-
-    // Adjust to a real, valid JKS truststore present in src/test/resources
-    private static final String TEST_TRUSTSTORE_PATH = "src/test/resources/test-truststore.jks";
-    private static final String TEST_TRUSTSTORE_PASSWORD = "changeit";
 
     @Mock
     private IdpTokenService idpTokenService;
@@ -59,29 +69,37 @@ class OcspCertificateVerificationServiceImplTest {
 
     @BeforeEach
     void setUp() throws Exception {
+        initPropertyUtilWithManagementNodeBaseUrl();
+
         Properties clientProps = new Properties();
-        clientProps.setProperty("client.p12FilePath", "src/test/resources/test-client.p12");
-        clientProps.setProperty("client.p12Password", "changeit");
-        clientProps.setProperty("client.truststoreFilePath", TEST_TRUSTSTORE_PATH);
-        clientProps.setProperty("client.truststorePassword", TEST_TRUSTSTORE_PASSWORD);
         clientProps.setProperty("management.node.base.url", BASE_URL);
 
-        service = new OcspCertificateVerificationServiceImpl(clientProps, idpTokenService);
-
-        // Replace the internally-constructed real HttpClient with a mock so checkCertificateStatus()
-        // can be tested without a real network call. There is no constructor/setter seam for this
-        // currently — consider adding a package-private setter or an httpClient constructor parameter
-        // to avoid reflection in tests going forward.
-        replaceHttpClientWithMock(service, mockHttpClient);
+        // Stub the static factory that builds the real HttpClient (normally requires a real
+        // keystore + truststore on disk) so construction never touches the filesystem or needs
+        // any TLS material - only the returned HttpClient instance is faked.
+        try (MockedStatic<HttpClientFactoryUtils> factoryMock = mockStatic(HttpClientFactoryUtils.class)) {
+            factoryMock
+                    .when(() -> HttpClientFactoryUtils.createHttpClientWithMtls(any()))
+                    .thenReturn(mockHttpClient);
+            service = new OcspCertificateVerificationServiceImpl(clientProps, idpTokenService);
+        }
 
         when(idpTokenService.fetchToken()).thenReturn("test-jwt-token");
     }
 
-    private void replaceHttpClientWithMock(OcspCertificateVerificationServiceImpl target, HttpClient mock)
-            throws Exception {
-        Field field = OcspCertificateVerificationServiceImpl.class.getDeclaredField("httpClient");
-        field.setAccessible(true);
-        field.set(target, mock);
+    @AfterEach
+    void tearDown() {
+        PropertyUtil.clear();
+    }
+
+    private void initPropertyUtilWithManagementNodeBaseUrl() throws Exception {
+        PropertyUtil.clear();
+        File tempFile = File.createTempFile("ocsp-test", ".properties");
+        tempFile.deleteOnExit();
+        try (FileWriter writer = new FileWriter(tempFile)) {
+            writer.write("management.node.base.url=" + BASE_URL + "\n");
+        }
+        PropertyUtil.init(tempFile);
     }
 
     // -------------------------------------------------------------------------
@@ -220,14 +238,14 @@ class OcspCertificateVerificationServiceImplTest {
     // Test helpers
     // -------------------------------------------------------------------------
 
-
     private void stubManagementNodeResponse(int statusCode, String body) throws Exception {
         when(mockHttpResponse.statusCode()).thenReturn(statusCode);
-        when(mockHttpResponse.body()).thenReturn(body);
+        // lenient: the non-200 test case returns before checkCertificateStatus() ever calls
+        // body(), which would otherwise trip MockitoExtension's STRICT_STUBS unnecessary-stubbing
+        // check for that one test - every other caller of this helper does use body() normally.
+        org.mockito.Mockito.lenient().when(mockHttpResponse.body()).thenReturn(body);
 
         when(mockHttpClient.send(any(HttpRequest.class), any(HttpResponse.BodyHandler.class)))
                 .thenReturn(mockHttpResponse);
     }
-
- */
 }
