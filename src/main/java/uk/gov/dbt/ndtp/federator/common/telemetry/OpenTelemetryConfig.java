@@ -7,6 +7,7 @@ import io.opentelemetry.api.OpenTelemetry;
 import io.opentelemetry.instrumentation.logback.appender.v1_0.OpenTelemetryAppender;
 import io.opentelemetry.sdk.OpenTelemetrySdk;
 import io.opentelemetry.sdk.autoconfigure.AutoConfiguredOpenTelemetrySdk;
+import io.opentelemetry.sdk.logs.LogRecordProcessor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -52,13 +53,18 @@ public final class OpenTelemetryConfig {
     static {
         // DSI EDIT (collector-down noise suppression): the OTel SDK's own exporters log via
         // java.util.logging (JUL), NOT SLF4J/Logback - completely separate from our own logging
-        // config. By default they log a WARNING with a full stack trace on EVERY failed OTLP
-        // export attempt (connection refused, timeout, etc.), which floods stdout with repeated
-        // exceptions for as long as the collector is unreachable or down. Raising the threshold
-        // to SEVERE silences that routine per-retry noise; genuinely fatal SDK issues (rare) still
-        // come through. We surface collector-unavailability ourselves instead, as a single clean
-        // line, at startup (see initialize() below).
-        java.util.logging.Logger.getLogger("io.opentelemetry").setLevel(java.util.logging.Level.SEVERE);
+        // config. ThrottlingLogger logs export failures (collector unreachable, DNS failure,
+        // connection refused, timeout, etc.) at SEVERE with the full exception + stack trace on
+        // every failed OTLP export attempt. Replace the default console handler on this logger
+        // with CollectorUnavailableLogHandler, which swallows the stack trace and emits a single
+        // short application-level message via SLF4J instead.
+        java.util.logging.Logger otelJulLogger = java.util.logging.Logger.getLogger("io.opentelemetry");
+        otelJulLogger.setUseParentHandlers(false);
+        for (java.util.logging.Handler existing : otelJulLogger.getHandlers()) {
+            otelJulLogger.removeHandler(existing);
+        }
+        otelJulLogger.addHandler(new CollectorUnavailableLogHandler());
+        otelJulLogger.setLevel(java.util.logging.Level.ALL);
     }
 
     private OpenTelemetryConfig() {}
@@ -74,7 +80,16 @@ public final class OpenTelemetryConfig {
 
         boolean exportingViaOtlp = false;
         try {
-            AutoConfiguredOpenTelemetrySdk autoConfigured = AutoConfiguredOpenTelemetrySdk.initialize();
+            String componentName = resolveComponentName();
+            AutoConfiguredOpenTelemetrySdk autoConfigured = AutoConfiguredOpenTelemetrySdk.builder()
+                    // DSI EDIT (log.component fix): stamp "component.name" onto every emitted
+                    // log record so Data Prepper's existing component.name -> log.component
+                    // mapping (already proven by the Python pipeline's logs) also fires for
+                    // federator-server/federator-client - without editing every log call site.
+                    .addLogRecordProcessorCustomizer((delegate, config) ->
+                            LogRecordProcessor.composite(
+                                    new ComponentNameLogRecordProcessor(componentName), delegate))
+                    .build();
             OpenTelemetrySdk sdk = autoConfigured.getOpenTelemetrySdk();
             openTelemetry = sdk;
 
@@ -137,6 +152,38 @@ public final class OpenTelemetryConfig {
                     "Mapped legacy SERVICE_VERSION/ENVIRONMENT to otel.resource.attributes='{}'",
                     resourceAttributes);
         }
+    }
+
+    /**
+     * Resolves the component name to stamp onto every log record, using the same precedence
+     * OtelJsonLayout.resolveServiceName() uses for the resource's service.name: otel.service.name
+     * (sys prop) -> OTEL_SERVICE_NAME (env) -> service.name in OTEL_RESOURCE_ATTRIBUTES ->
+     * "dpn-federator-gateway". Kept identical to service.name deliberately: federator-server and
+     * federator-client are each a single OTel resource with no finer-grained sub-components (unlike
+     * the Python pipeline's per-stage components), so component.name == service.name here.
+     */
+    private static String resolveComponentName() {
+        String fromSysProp = System.getProperty("otel.service.name");
+        if (fromSysProp != null && !fromSysProp.isBlank()) {
+            return fromSysProp;
+        }
+        String fromEnv = System.getenv("OTEL_SERVICE_NAME");
+        if (fromEnv != null && !fromEnv.isBlank()) {
+            return fromEnv;
+        }
+        String raw = System.getProperty("otel.resource.attributes");
+        if (raw == null || raw.isBlank()) {
+            raw = System.getenv("OTEL_RESOURCE_ATTRIBUTES");
+        }
+        if (raw != null) {
+            for (String pair : raw.split(",")) {
+                int eq = pair.indexOf('=');
+                if (eq > 0 && "service.name".equals(pair.substring(0, eq).trim())) {
+                    return pair.substring(eq + 1).trim();
+                }
+            }
+        }
+        return "dpn-federator-gateway";
     }
 
     public static OpenTelemetry get() {

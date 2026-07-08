@@ -21,9 +21,16 @@ import org.slf4j.event.KeyValuePair;
  * Unit tests for {@link HeartbeatService}. Events are captured with a Logback {@link ListAppender}
  * attached to the component-named logger, so the real heartbeat output (message, key/value pairs)
  * is asserted without a running Collector. Maps to TELEMETRY_TEST_CASES sections C3 and G1-G16.
+ *
+ * <p>DSI EDIT (coverage fix): this entire class body was wrapped in a block comment - none of
+ * these 10 tests ever compiled or ran, which is why HeartbeatService showed 0% coverage despite
+ * substantial, well-targeted test code existing. All referenced HeartbeatService methods
+ * (create(...), start(), stop(Duration), emit(), isRunning(), updateMetadata(...)) were verified
+ * to exist with matching signatures, so no other changes were needed - this was purely disabled,
+ * not stale.
  */
 class HeartbeatServiceTest {
-/*
+
     private HeartbeatService service;
     private ListAppender<ILoggingEvent> appender;
     private Logger boundLogger;
@@ -223,6 +230,5 @@ class HeartbeatServiceTest {
             }
         }
     }
-    */
 
 }

@@ -14,16 +14,44 @@ import io.opentelemetry.api.trace.TraceFlags;
 import io.opentelemetry.api.trace.TraceState;
 import io.opentelemetry.context.Context;
 import io.opentelemetry.context.Scope;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 /**
  * Validates OtelJsonLayout against the exact field-presence rules in OTEL_LOG_SAMPLES.md /
  * OTEL_LOG_TRACE_CONTEXT_EXPLAINED.md: trace_id/span_id/trace_flags are top-level, present only
  * inside an active span (Sample 3), absent for non-traced logs (Samples 1 and 4).
+ *
+ * <p>DSI EDIT (test-isolation fix): resolveServiceName() deliberately prioritises
+ * otel.service.name (sys prop) / OTEL_SERVICE_NAME (env) over the layout's own configured
+ * serviceName field - that's correct production behaviour (lets OTEL_SERVICE_NAME=federator-client
+ * override the static logback config at runtime), but it means the one test in this class that
+ * calls layout.setServiceName("dpn-federator-gateway") and asserts on that exact value is
+ * silently at the mercy of whatever OTEL_SERVICE_NAME happens to be set to in the environment
+ * running the test (e.g. an IntelliJ run configuration left over from manually running
+ * federator-server locally, which is exactly what caused this test to fail with "federator-server"
+ * instead of the expected "dpn-federator-gateway"). {@link #forceCleanServiceNameResolution()}
+ * neutralises that by explicitly setting otel.service.name to match - since the sys prop is
+ * checked BEFORE the env var, this makes resolveServiceName() deterministic regardless of any
+ * real OTEL_SERVICE_NAME env var on the machine, without needing to touch env vars at all.
  */
 class OtelJsonLayoutTest {
 
     private final ObjectMapper mapper = new ObjectMapper();
+
+    @BeforeEach
+    void forceCleanServiceNameResolution() {
+        // Matches OtelJsonLayout's own field default (and the only value this class's tests
+        // configure/assert on) - so resolveServiceName() is deterministic regardless of any real
+        // OTEL_SERVICE_NAME env var on the machine running the test.
+        System.setProperty("otel.service.name", "dpn-federator-gateway");
+    }
+
+    @AfterEach
+    void clearServiceNameOverride() {
+        System.clearProperty("otel.service.name");
+    }
 
     // A LoggerContext-backed Logger is required to safely construct LoggingEvent instances:
     // the no-arg LoggingEvent() constructor leaves loggerContext null, and Logback's own
