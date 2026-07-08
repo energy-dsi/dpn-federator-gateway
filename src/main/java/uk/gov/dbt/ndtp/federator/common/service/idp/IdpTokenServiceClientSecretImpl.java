@@ -6,11 +6,11 @@ package uk.gov.dbt.ndtp.federator.common.service.idp;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.URI;
-import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.Map;
 import java.util.Properties;
+import java.util.function.Supplier;
 import lombok.extern.slf4j.Slf4j;
 import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
 import uk.gov.dbt.ndtp.federator.exceptions.FederatorTokenException;
@@ -27,10 +27,11 @@ public class IdpTokenServiceClientSecretImpl extends AbstractIdpTokenService {
     private final String idpClientId;
     private final String idpClientSecret;
 
-    public IdpTokenServiceClientSecretImpl(HttpClient httpClient, ObjectMapper objectMapper) {
+    public IdpTokenServiceClientSecretImpl(
+            Supplier<java.net.http.HttpClient> httpClientSupplier, ObjectMapper objectMapper) {
         super(
                 PropertyUtil.getPropertiesFromFilePath(COMMON_CONFIG_PROPERTIES).getProperty("idp.jwks.url"),
-                httpClient,
+                httpClientSupplier,
                 objectMapper);
         Properties properties = PropertyUtil.getPropertiesFromFilePath(COMMON_CONFIG_PROPERTIES);
         this.idpTokenUrl = properties.getProperty("idp.token.url");
@@ -82,7 +83,8 @@ public class IdpTokenServiceClientSecretImpl extends AbstractIdpTokenService {
                     .POST(HttpRequest.BodyPublishers.ofString(body))
                     .build();
 
-            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            HttpResponse<String> response =
+                    httpClientSupplier.get().send(request, HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() != 200) {
                 throw new FederatorTokenException(
                         String.format("Failed to fetch token: HTTP %d - %s", response.statusCode(), response.body()));

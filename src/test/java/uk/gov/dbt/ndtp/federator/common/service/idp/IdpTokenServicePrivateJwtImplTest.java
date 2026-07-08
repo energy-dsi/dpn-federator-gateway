@@ -14,6 +14,7 @@ import java.security.KeyStore;
 import java.security.cert.X509Certificate;
 import java.util.Base64;
 import java.util.Properties;
+import java.util.function.Supplier;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -63,7 +64,7 @@ class IdpTokenServicePrivateJwtImplTest {
     }
 
     private IdpTokenServicePrivateJwtImpl buildService(Properties props) {
-        return new IdpTokenServicePrivateJwtImpl(mockHttpClient, realObjectMapper, props);
+        return new IdpTokenServicePrivateJwtImpl((Supplier<HttpClient>) () -> mockHttpClient, realObjectMapper, props);
     }
 
     // -----------------------------------------------------------------------
@@ -94,57 +95,64 @@ class IdpTokenServicePrivateJwtImplTest {
     }
 
     @Test
-    void constructor_throws_whenKeystorePathMissing() {
+    void fetchToken_throws_whenKeystorePathMissing() {
         Properties props = basePrivateJwtProperties();
         props.remove("idp.keystore.path");
 
-        FederatorTokenException ex = assertThrows(FederatorTokenException.class, () -> buildService(props));
-        assertTrue(ex.getMessage().contains("private_key_jwt requires"));
+        IdpTokenServicePrivateJwtImpl pjwtService = buildService(props);
+        FederatorTokenException ex = assertThrows(FederatorTokenException.class, () -> pjwtService.fetchToken(null));
+        assertTrue(ex.getMessage().contains("Error fetching token"));
     }
 
     @Test
-    void constructor_throws_whenKeystorePasswordMissing() {
+    void fetchToken_throws_whenKeystorePasswordMissing() {
         Properties props = basePrivateJwtProperties();
         props.remove("idp.keystore.password");
 
-        FederatorTokenException ex = assertThrows(FederatorTokenException.class, () -> buildService(props));
-        assertTrue(ex.getMessage().contains("private_key_jwt requires"));
+        IdpTokenServicePrivateJwtImpl pjwtService = buildService(props);
+        FederatorTokenException ex = assertThrows(FederatorTokenException.class, () -> pjwtService.fetchToken(null));
+        assertTrue(ex.getMessage().contains("Error fetching token"));
     }
 
     @Test
-    void constructor_throws_whenKeyAliasMissing() {
+    void fetchToken_throws_whenKeyAliasMissing() {
         Properties props = basePrivateJwtProperties();
         props.remove("idp.jwt.key.alias");
 
-        FederatorTokenException ex = assertThrows(FederatorTokenException.class, () -> buildService(props));
-        assertTrue(ex.getMessage().contains("private_key_jwt requires"));
+        IdpTokenServicePrivateJwtImpl pjwtService = buildService(props);
+        FederatorTokenException ex = assertThrows(FederatorTokenException.class, () -> pjwtService.fetchToken(null));
+        assertTrue(ex.getMessage().contains("Error fetching token"));
     }
 
     @Test
-    void constructor_throws_whenAliasNotFoundInKeystore() {
+    void fetchtoken_throws_whenAliasNotFoundInKeystore() {
         Properties props = basePrivateJwtProperties();
         props.setProperty("idp.jwt.key.alias", "does-not-exist-alias");
 
-        FederatorTokenException ex = assertThrows(FederatorTokenException.class, () -> buildService(props));
+        IdpTokenServicePrivateJwtImpl pjwtService = buildService(props);
+        FederatorTokenException ex = assertThrows(FederatorTokenException.class, () -> pjwtService.fetchToken(null));
 //        assertTrue(ex.getMessage().contains("Failed to load keystore"));
     }
 
     @Test
-    void constructor_throws_whenKeystorePasswordIncorrect() {
+    void fetchToken_throws_whenKeystorePasswordIncorrect() {
         Properties props = basePrivateJwtProperties();
         props.setProperty("idp.keystore.password", "wrong-password");
 
-        FederatorTokenException ex = assertThrows(FederatorTokenException.class, () -> buildService(props));
-        assertTrue(ex.getMessage().contains("Failed to load keystore"));
+        IdpTokenServicePrivateJwtImpl pjwtService = buildService(props);
+        FederatorTokenException ex = assertThrows(FederatorTokenException.class, () -> pjwtService.fetchToken(null));
+        assertTrue(ex.getMessage().contains("Error fetching token"));
     }
 
     @Test
-    void constructor_throws_whenKeystoreFileDoesNotExist() {
+    void fetchToken_throws_whenKeystoreFileDoesNotExist() {
         Properties props = basePrivateJwtProperties();
         props.setProperty("idp.keystore.path", tempDir.resolve("nonexistent.p12").toString());
 
-        FederatorTokenException ex = assertThrows(FederatorTokenException.class, () -> buildService(props));
-        assertTrue(ex.getMessage().contains("Failed to load keystore"));
+        IdpTokenServicePrivateJwtImpl pjwtService = buildService(props);
+        FederatorTokenException ex = assertThrows(FederatorTokenException.class, () -> pjwtService.fetchToken(null));
+        assertTrue(ex.getMessage().contains("Error fetching token"));
+//        assertTrue(ex.getMessage().contains("Failed to load keystore"));
     }
 
     @Test

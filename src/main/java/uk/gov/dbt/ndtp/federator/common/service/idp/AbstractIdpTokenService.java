@@ -22,6 +22,7 @@ import java.net.http.HttpResponse;
 import java.text.ParseException;
 import java.time.Instant;
 import java.util.Date;
+import java.util.function.Supplier;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import uk.gov.dbt.ndtp.federator.common.utils.ResilienceSupport;
@@ -31,12 +32,13 @@ import uk.gov.dbt.ndtp.federator.exceptions.FederatorTokenException;
 public abstract class AbstractIdpTokenService implements IdpTokenService {
 
     protected final String idpJwksUrl;
-    protected final HttpClient httpClient;
+    protected final Supplier<HttpClient> httpClientSupplier;
     protected final ObjectMapper objectMapper;
 
-    protected AbstractIdpTokenService(String idpJwksUrl, HttpClient httpClient, ObjectMapper objectMapper) {
+    protected AbstractIdpTokenService(
+            String idpJwksUrl, Supplier<HttpClient> httpClientSupplier, ObjectMapper objectMapper) {
         this.idpJwksUrl = idpJwksUrl;
-        this.httpClient = httpClient;
+        this.httpClientSupplier = httpClientSupplier;
         this.objectMapper = objectMapper;
     }
 
@@ -93,7 +95,7 @@ public abstract class AbstractIdpTokenService implements IdpTokenService {
         HttpRequest request =
                 HttpRequest.newBuilder().uri(URI.create(idpJwksUrl)).GET().build();
 
-        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        HttpResponse<String> response = httpClientSupplier.get().send(request, HttpResponse.BodyHandlers.ofString());
         if (response.statusCode() != 200) {
             throw createJwksFetchException(response);
         }

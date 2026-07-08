@@ -8,8 +8,8 @@
 package uk.gov.dbt.ndtp.federator.common.utils;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import java.net.http.HttpClient;
 import java.util.Properties;
+import java.util.function.Supplier;
 import uk.gov.dbt.ndtp.federator.common.management.ManagementNodeDataHandler;
 import uk.gov.dbt.ndtp.federator.common.service.config.ProducerConfigService;
 import uk.gov.dbt.ndtp.federator.common.service.idp.IdpTokenService;
@@ -38,8 +38,8 @@ public class ProducerConsumerConfigServiceFactory {
                 PropertyUtil.overrideWithSecrets(properties, secretProvider);
 
                 IdpTokenService tokenService = GRPCUtils.createIdpTokenService();
-                HttpClient httpClient = HttpClientFactoryUtils.createHttpClientWithMtls(properties);
-                var managementNodeDataHandler = new ManagementNodeDataHandler(httpClient, mapper, tokenService);
+                Supplier<java.net.http.HttpClient> httpClientSupplier = () -> HttpClientFactoryUtils.createHttpClientWithMtls(properties);
+                var managementNodeDataHandler = new ManagementNodeDataHandler(httpClientSupplier, mapper, tokenService);
                 InMemoryConfigurationStore store = InMemoryConfigurationStore.getInstance();
                 producerConfigService = new ProducerConfigService(managementNodeDataHandler, store);
             }

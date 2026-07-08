@@ -28,8 +28,8 @@ package uk.gov.dbt.ndtp.federator;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.File;
-import java.net.http.HttpClient;
 import java.util.Properties;
+import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import uk.gov.dbt.ndtp.federator.client.connection.ConnectionProperties;
@@ -49,12 +49,6 @@ import uk.gov.dbt.ndtp.federator.common.utils.HttpClientFactoryUtils;
 import uk.gov.dbt.ndtp.federator.common.utils.ObjectMapperUtil;
 import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
 import uk.gov.dbt.ndtp.federator.exceptions.ConfigurationException;
-
-import java.io.File;
-import java.net.http.HttpClient;
-import java.util.Properties;
-
-import static io.opentelemetry.semconv.SemanticAttributes.SystemPagingDirectionValues.OUT;
 
 /**
  * Main class for the Federator client.
@@ -165,34 +159,38 @@ public class FederatorClient {
      * @return configured service
      */
     private static ConsumerConfigService createConfigService() {
-        final HttpClient httpClient = createHttpClient();
+        final Supplier<java.net.http.HttpClient> httpClientSupplier = createHttpClientSupplier();
         final ObjectMapper mapper = ObjectMapperUtil.getInstance();
 
         final IdpTokenService tokenService = GRPCUtils.createIdpTokenService();
-        final ManagementNodeDataHandler handler = new ManagementNodeDataHandler(httpClient, mapper, tokenService);
+        final ManagementNodeDataHandler handler = new ManagementNodeDataHandler(httpClientSupplier, mapper, tokenService);
         final InMemoryConfigurationStore store = InMemoryConfigurationStore.getInstance();
         LOGGER.info(LOG_SERVICE);
         return new ConsumerConfigService(handler, store);
     }
 
     /**
-     * Creates HTTP client with SSL if configured.
+     * Returns a supplier that creates a fresh HttpClient with the current SSL context on each
+     * call. The Properties are read once here (they contain paths/passwords, not cert material)
+     * so the supplier closes over a stable snapshot while still reloading keystore bytes from
+     * disk on every invocation.
      *
-     * @return HTTP client
+     * @return HttpClient supplier
      */
-    private static HttpClient createHttpClient() {
+    private static Supplier<java.net.http.HttpClient> createHttpClientSupplier() {
         final Properties props = PropertyUtil.getPropertiesFromFilePath(COMMON_CONFIG);
 
         SecretProvider secretProvider = PropertyUtil.createSecretProvider(props);
         PropertyUtil.overrideWithSecrets(props, secretProvider);
 
-        try {
-
-            return HttpClientFactoryUtils.createHttpClientWithMtls(props);
-        } catch (Exception e) {
-            LOGGER.error(ERR_SSL_CONFIG, e.getMessage());
-            return HttpClientFactoryUtils.createHttpClient(props);
-        }
+        return () -> {
+            try {
+                return HttpClientFactoryUtils.createHttpClientWithMtls(props);
+            } catch (Exception e) {
+                LOGGER.error(ERR_SSL_CONFIG, e.getMessage());
+                return HttpClientFactoryUtils.createHttpClient(props);
+            }
+        };
     }
 
     /** Runs the client lifecycle. */
@@ -282,21 +280,8 @@ public class FederatorClient {
             System.exit(code);
         }
     }
-    private static OcspCertificateVerificationService createOcspService() {
-//        Properties clientProps = new Properties();
-//        clientProps.setProperty("client.p12FilePath",
-//                PropertyUtil.getPropertyValue("client.p12FilePath"));
-//        clientProps.setProperty("client.p12Password",
-//                PropertyUtil.getPropertyValue("client.p12Password"));
-//        clientProps.setProperty("client.truststoreFilePath",
-//                PropertyUtil.getPropertyValue("client.truststoreFilePath"));
-//        clientProps.setProperty("client.truststorePassword",
-//                PropertyUtil.getPropertyValue("client.truststorePassword"));
-//        clientProps.setProperty("management.node.base.url",
-//                PropertyUtil.getPropertyValue("management.node.base.url"));
-//        clientProps.setProperty("ocsp.cache.ttl.seconds",
-//                PropertyUtil.getPropertyValue("ocsp.cache.ttl.seconds", "300"));
 
+    private static OcspCertificateVerificationService createOcspService() {
         Properties properties = PropertyUtil.getPropertiesFromFilePath(GRPCUtils.COMMON_CONFIG_PROPERTIES);
 
         SecretProvider secretProvider = PropertyUtil.createSecretProvider(properties);

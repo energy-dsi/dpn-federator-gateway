@@ -13,6 +13,7 @@ import java.net.http.HttpResponse;
 import java.net.http.HttpResponse.BodyHandlers;
 import java.time.Duration;
 import java.util.Objects;
+import java.util.function.Supplier;
 import lombok.extern.slf4j.Slf4j;
 import uk.gov.dbt.ndtp.federator.common.model.dto.ConsumerConfigDTO;
 import uk.gov.dbt.ndtp.federator.common.model.dto.ProducerConfigDTO;
@@ -39,7 +40,7 @@ public class ManagementNodeDataHandler implements ManagementNodeDataHandlerInter
     private static final String BASE_URL_PROP = "management.node.base.url";
     private static final String TIMEOUT_PROP = "management.node.request.timeout";
     private static final String SLASH = "/";
-    private static final String ERR_NULL_CLIENT = "HttpClient must not be null";
+    private static final String ERR_NULL_CLIENT = "HttpClient supplier must not be null";
     private static final String ERR_NULL_MAPPER = "ObjectMapper must not be null";
     private static final String ERR_NULL_SERVICE = "TokenService must not be null";
     private static final String ERR_EMPTY_URL = "Base URL cannot be empty";
@@ -50,7 +51,7 @@ public class ManagementNodeDataHandler implements ManagementNodeDataHandlerInter
     private static final String LOG_INIT = "Handler init [url={}]";
     private static final String LOG_FETCH = "Fetch [url={}]";
 
-    private final HttpClient httpClient;
+    private final Supplier<HttpClient> httpClientSupplier;
     private final ObjectMapper objectMapper;
     private final IdpTokenService tokenService;
     private final String baseUrl;
@@ -59,15 +60,15 @@ public class ManagementNodeDataHandler implements ManagementNodeDataHandlerInter
     /**
      * Constructs handler with required dependencies.
      *
-     * @param client HTTP client for requests
+     * @param clientSupplier supplier for HTTP client (invoked on each request for fresh SSL context)
      * @param mapper JSON mapper for responses
      * @param service service for JWT tokens
      * @throws NullPointerException if any parameter is null
      * @throws IllegalStateException if required properties missing
      */
     public ManagementNodeDataHandler(
-            final HttpClient client, final ObjectMapper mapper, final IdpTokenService service) {
-        this.httpClient = Objects.requireNonNull(client, ERR_NULL_CLIENT);
+            final Supplier<HttpClient> clientSupplier, final ObjectMapper mapper, final IdpTokenService service) {
+        this.httpClientSupplier = Objects.requireNonNull(clientSupplier, ERR_NULL_CLIENT);
         this.objectMapper = Objects.requireNonNull(mapper, ERR_NULL_MAPPER);
         this.tokenService = Objects.requireNonNull(service, ERR_NULL_SERVICE);
         this.baseUrl = loadRequiredUrl();
@@ -145,7 +146,7 @@ public class ManagementNodeDataHandler implements ManagementNodeDataHandlerInter
             throws ManagementNodeDataException {
         try {
             log.debug("Send HTTPS request [uri={}]", request.uri());
-            final HttpResponse<String> response = httpClient.send(request, BodyHandlers.ofString());
+            final HttpResponse<String> response = httpClientSupplier.get().send(request, BodyHandlers.ofString());
             log.debug(
                     "Response [status={}, body-length={}]",
                     response.statusCode(),

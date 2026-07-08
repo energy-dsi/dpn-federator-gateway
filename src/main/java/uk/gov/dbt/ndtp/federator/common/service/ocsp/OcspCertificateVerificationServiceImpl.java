@@ -6,17 +6,14 @@ import lombok.extern.slf4j.Slf4j;
 import uk.gov.dbt.ndtp.federator.common.service.idp.IdpTokenService;
 import uk.gov.dbt.ndtp.federator.common.utils.HttpClientFactoryUtils;
 import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
-import uk.gov.dbt.ndtp.federator.common.utils.SSLUtils;
 import uk.gov.dbt.ndtp.federator.exceptions.OcspVerificationException;
 
-import javax.net.ssl.SSLContext;
 import java.net.URI;
-import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.time.Duration;
 import java.time.Instant;
 import java.util.Properties;
+import java.util.function.Supplier;
 
 @Slf4j
 public class OcspCertificateVerificationServiceImpl
@@ -27,7 +24,7 @@ public class OcspCertificateVerificationServiceImpl
 
 
     private final String managementNodeBaseUrl;
-    private final HttpClient httpClient;
+    private final Supplier<java.net.http.HttpClient> httpClientSupplier;
     private final OtelCertificateVerificationLogger otelLogger;
     private final IdpTokenService idpTokenService;
 
@@ -38,7 +35,7 @@ public class OcspCertificateVerificationServiceImpl
         this.idpTokenService = idpTokenService;
         this.otelLogger = new OtelCertificateVerificationLogger();
 
-        this.httpClient = HttpClientFactoryUtils.createHttpClientWithMtls(properties);
+        this.httpClientSupplier = () -> HttpClientFactoryUtils.createHttpClientWithMtls(properties);
     }
     @Override
 
@@ -87,7 +84,7 @@ public class OcspCertificateVerificationServiceImpl
 
         HttpResponse<String> response =
 
-                httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+                httpClientSupplier.get().send(request, HttpResponse.BodyHandlers.ofString());
 
         if (response.statusCode() != 200) {
 

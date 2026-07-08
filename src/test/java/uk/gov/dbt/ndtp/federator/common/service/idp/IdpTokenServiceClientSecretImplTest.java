@@ -17,6 +17,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.Map;
 import java.util.Properties;
+import java.util.function.Supplier;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -74,7 +75,8 @@ class IdpTokenServiceClientSecretImplTest {
         when(objectMapper.readValue(anyString(), any(TypeReference.class)))
                 .thenReturn(Map.of("access_token", "secret-token"));
 
-        IdpTokenServiceClientSecretImpl service = new IdpTokenServiceClientSecretImpl(httpClient, objectMapper);
+        IdpTokenServiceClientSecretImpl service =
+                new IdpTokenServiceClientSecretImpl((Supplier<HttpClient>) () -> httpClient, objectMapper);
         String token = service.fetchToken("node-1");
 
         assertEquals("secret-token", token);
@@ -88,7 +90,7 @@ class IdpTokenServiceClientSecretImplTest {
         when(httpClient.send(any(HttpRequest.class), any(HttpResponse.BodyHandler.class)))
                 .thenReturn(response);
 
-        IdpTokenServiceClientSecretImpl service = new IdpTokenServiceClientSecretImpl(httpClient, objectMapper);
+        IdpTokenServiceClientSecretImpl service = new IdpTokenServiceClientSecretImpl(() -> httpClient, objectMapper);
         assertThrows(FederatorTokenException.class, () -> service.fetchToken("node-1"));
     }
 
@@ -102,7 +104,7 @@ class IdpTokenServiceClientSecretImplTest {
         when(objectMapper.readValue(anyString(), any(TypeReference.class)))
                 .thenReturn(Map.of("access_token", "resilient-secret-token"));
 
-        IdpTokenServiceClientSecretImpl service = new IdpTokenServiceClientSecretImpl(httpClient, objectMapper);
+        IdpTokenServiceClientSecretImpl service = new IdpTokenServiceClientSecretImpl(() -> httpClient, objectMapper);
         String token = service.fetchToken();
 
         assertEquals("resilient-secret-token", token);

@@ -4,8 +4,6 @@
 package uk.gov.dbt.ndtp.federator.common.utils;
 
 import static uk.gov.dbt.ndtp.federator.client.grpc.GRPCClient.*;
-import static uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil.ENV_VAULT_TOKEN;
-import static uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil.VAULT_URI;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.grpc.ChannelCredentials;
@@ -15,6 +13,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.util.Properties;
+import java.util.function.Supplier;
 import javax.net.ssl.KeyManager;
 import javax.net.ssl.TrustManager;
 import org.slf4j.Logger;
@@ -42,6 +41,7 @@ public class GRPCUtils {
 
     /** Kept for backward compatibility; ignored when {@code idp.auth.mode} is set. */
     private static final String IDP_MTLS_ENABLED_PROPERTY = "idp.mtls.enabled";
+
     private static final Logger LOGGER = LoggerFactory.getLogger("GRPCUtils");
 
     private GRPCUtils() {
@@ -59,10 +59,10 @@ public class GRPCUtils {
 
         // Prefer the explicit idp.auth.mode property; fall back to the legacy
         // idp.mtls.enabled boolean for backward compatibility.
-        String authMode = properties.getProperty(IDP_AUTH_MODE_PROPERTY, "").trim().toLowerCase();
+        String authMode =
+                properties.getProperty(IDP_AUTH_MODE_PROPERTY, "").trim().toLowerCase();
         if (authMode.isEmpty()) {
-            boolean mtlsLegacy = Boolean.parseBoolean(
-                    properties.getProperty(IDP_MTLS_ENABLED_PROPERTY, "false"));
+            boolean mtlsLegacy = Boolean.parseBoolean(properties.getProperty(IDP_MTLS_ENABLED_PROPERTY, "false"));
             authMode = mtlsLegacy ? "mtls" : "client_secret";
         }
 
@@ -70,23 +70,23 @@ public class GRPCUtils {
 
         return switch (authMode) {
             case "private_key_jwt" -> {
-                // HttpClient client = HttpClientFactoryUtils.createHttpClient(properties);
-                // Modified as private key JWT also require mTLS to be performed at edge layer
-                HttpClient client = HttpClientFactoryUtils.createHttpClientWithMtls(properties);
-                yield new IdpTokenServicePrivateJwtImpl(client, mapper, properties);
+                // Supplier defers HttpClient creation to each fetchToken() call so that
+                // rotated mTLS certificates are always picked up without a process restart.
+                Supplier<HttpClient> clientSupplier = () -> HttpClientFactoryUtils.createHttpClientWithMtls(properties);
+                yield new IdpTokenServicePrivateJwtImpl(clientSupplier, mapper, properties);
             }
             case "mtls" -> {
                 LOGGER.warn("===========Idp mTLS enabled (legacy mode)============");
-                HttpClient client = HttpClientFactoryUtils.createHttpClientWithMtls(properties);
-                yield new IdpTokenServiceMtlsImpl(client, mapper);
+                Supplier<HttpClient> clientSupplier = () -> HttpClientFactoryUtils.createHttpClientWithMtls(properties);
+                yield new IdpTokenServiceMtlsImpl(clientSupplier, mapper);
             }
             default -> {
                 // "client_secret" or any unrecognised value
                 if (!"client_secret".equals(authMode)) {
                     LOGGER.warn("Unknown idp.auth.mode '{}', defaulting to client_secret", authMode);
                 }
-                HttpClient client = HttpClientFactoryUtils.createHttpClient(properties);
-                yield new IdpTokenServiceClientSecretImpl(client, mapper);
+                Supplier<HttpClient> clientSupplier = () -> HttpClientFactoryUtils.createHttpClient(properties);
+                yield new IdpTokenServiceClientSecretImpl(clientSupplier, mapper);
             }
         };
     }

@@ -111,7 +111,7 @@ class IdpTokenServiceTest {
         when(httpClient.send(any(HttpRequest.class), any(HttpResponse.BodyHandler.class)))
                 .thenReturn(response);
 
-        AbstractIdpTokenService service = new AbstractIdpTokenService("http://jwks", httpClient, objectMapper) {
+        AbstractIdpTokenService service = new AbstractIdpTokenService("http://jwks", () -> httpClient, objectMapper) {
             @Override
             public String fetchToken() {
                 return null;
@@ -278,7 +278,7 @@ class IdpTokenServiceTest {
         when(httpClient.send(any(HttpRequest.class), any(HttpResponse.BodyHandler.class)))
                 .thenReturn(response);
 
-        AbstractIdpTokenService service = new AbstractIdpTokenService("http://jwks", httpClient, objectMapper) {
+        AbstractIdpTokenService service = new AbstractIdpTokenService("http://jwks", () -> httpClient, objectMapper) {
             @Override
             public String fetchToken() {
                 return null;
@@ -325,7 +325,7 @@ class IdpTokenServiceTest {
         when(httpClient.send(any(HttpRequest.class), any(HttpResponse.BodyHandler.class)))
                 .thenReturn(response);
 
-        AbstractIdpTokenService service = new AbstractIdpTokenService("http://jwks", httpClient, objectMapper) {
+        AbstractIdpTokenService service = new AbstractIdpTokenService("http://jwks", () -> httpClient, objectMapper) {
             @Override
             public String fetchToken() {
                 return null;

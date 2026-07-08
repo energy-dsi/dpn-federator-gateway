@@ -21,6 +21,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.net.http.HttpResponse.BodyHandler;
+import java.util.function.Supplier;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -72,7 +73,7 @@ class ManagementNodeDataHandlerTest {
     void setUp() {
         propertyMock = mockStatic(PropertyUtil.class);
         setupProperties();
-        handler = new ManagementNodeDataHandler(httpClient, objectMapper, tokenService);
+        handler = new ManagementNodeDataHandler(() -> httpClient, objectMapper, tokenService);
     }
 
     @AfterEach
@@ -124,9 +125,13 @@ class ManagementNodeDataHandlerTest {
 
     @Test
     void testConstructorValidation() {
-        assertThrows(NullPointerException.class, () -> new ManagementNodeDataHandler(null, objectMapper, tokenService));
-        assertThrows(NullPointerException.class, () -> new ManagementNodeDataHandler(httpClient, null, tokenService));
-        assertThrows(NullPointerException.class, () -> new ManagementNodeDataHandler(httpClient, objectMapper, null));
+        assertThrows(
+                NullPointerException.class,
+                () -> new ManagementNodeDataHandler((Supplier<HttpClient>) null, objectMapper, tokenService));
+        assertThrows(
+                NullPointerException.class, () -> new ManagementNodeDataHandler(() -> httpClient, null, tokenService));
+        assertThrows(
+                NullPointerException.class, () -> new ManagementNodeDataHandler(() -> httpClient, objectMapper, null));
     }
 
     @Test
@@ -136,14 +141,14 @@ class ManagementNodeDataHandlerTest {
                 .thenThrow(new RuntimeException(ERROR_MSG));
         assertThrows(
                 IllegalStateException.class,
-                () -> new ManagementNodeDataHandler(httpClient, objectMapper, tokenService));
+                () -> new ManagementNodeDataHandler(() -> httpClient, objectMapper, tokenService));
 
         propertyMock
                 .when(() -> PropertyUtil.getPropertyValue(eq(BASE_URL_PROP), anyString()))
                 .thenReturn(EMPTY);
         assertThrows(
                 IllegalStateException.class,
-                () -> new ManagementNodeDataHandler(httpClient, objectMapper, tokenService));
+                () -> new ManagementNodeDataHandler(() -> httpClient, objectMapper, tokenService));
     }
 
     @Test
