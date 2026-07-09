@@ -17,7 +17,7 @@ import java.util.concurrent.TimeUnit;
  */
 public final class KeystoreTestFixture {
 
-    private static final String TEST_PASSWORD = "changeit";
+    private static final String TEST = "changeit";
     private static final String DEFAULT_DNAME = "CN=federator-test,OU=NDTP,O=DBT,L=London,ST=London,C=GB";
 
     private final Path keystorePath;
@@ -64,8 +64,8 @@ public final class KeystoreTestFixture {
                 "-dname", DEFAULT_DNAME,
                 "-keystore", keystorePath.toString(),
                 "-storetype", "PKCS12",
-                "-storepass", TEST_PASSWORD,
-                "-keypass", TEST_PASSWORD);
+                "-storepass", TEST,
+                "-keypass", TEST);
         pb.redirectErrorStream(true);
         Process process = pb.start();
 
@@ -80,7 +80,7 @@ public final class KeystoreTestFixture {
                     + ". Output: " + output);
         }
 
-        return new KeystoreTestFixture(keystorePath, alias, TEST_PASSWORD);
+        return new KeystoreTestFixture(keystorePath, alias, TEST);
     }
 
     private static String resolveKeytool() {
