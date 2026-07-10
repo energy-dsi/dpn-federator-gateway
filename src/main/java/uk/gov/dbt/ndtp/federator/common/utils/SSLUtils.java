@@ -35,6 +35,8 @@ import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.TrustManagerFactory;
+import javax.net.ssl.X509KeyManager;
+import javax.net.ssl.X509TrustManager;
 import lombok.extern.slf4j.Slf4j;
 import uk.gov.dbt.ndtp.federator.exceptions.FederatorSslException;
 
@@ -127,6 +129,48 @@ public class SSLUtils {
         } catch (IOException | GeneralSecurityException e) {
             throw new FederatorSslException("Failed to load trust store keystore.", e);
         }
+    }
+
+    /**
+     * Returns the first {@link X509KeyManager} from the supplied array.
+     * <p>
+     * Used to unwrap the concrete X509 key manager produced by a {@link KeyManagerFactory} so it can
+     * be placed behind a {@link ReloadableX509KeyManager} for zero-downtime certificate rotation.
+     *
+     * @param keyManagers the key managers returned by a {@link KeyManagerFactory}
+     * @return the first {@link X509KeyManager} found
+     * @throws FederatorSslException if the array contains no {@link X509KeyManager}
+     */
+    public static X509KeyManager extractX509KeyManager(KeyManager[] keyManagers) {
+        if (keyManagers != null) {
+            for (KeyManager keyManager : keyManagers) {
+                if (keyManager instanceof X509KeyManager x509KeyManager) {
+                    return x509KeyManager;
+                }
+            }
+        }
+        throw new FederatorSslException("No X509KeyManager found in the supplied KeyManager array.");
+    }
+
+    /**
+     * Returns the first {@link X509TrustManager} from the supplied array.
+     * <p>
+     * Used to unwrap the concrete X509 trust manager produced by a {@link TrustManagerFactory} so it
+     * can be placed behind a {@link ReloadableX509TrustManager} for zero-downtime truststore rotation.
+     *
+     * @param trustManagers the trust managers returned by a {@link TrustManagerFactory}
+     * @return the first {@link X509TrustManager} found
+     * @throws FederatorSslException if the array contains no {@link X509TrustManager}
+     */
+    public static X509TrustManager extractX509TrustManager(TrustManager[] trustManagers) {
+        if (trustManagers != null) {
+            for (TrustManager trustManager : trustManagers) {
+                if (trustManager instanceof X509TrustManager x509TrustManager) {
+                    return x509TrustManager;
+                }
+            }
+        }
+        throw new FederatorSslException("No X509TrustManager found in the supplied TrustManager array.");
     }
 
     /**
