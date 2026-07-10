@@ -120,9 +120,9 @@ class SSLUtilsTest {
      */
     @Test
     void testCreateKeyManagerFromP12_InputStream_Positive() throws Exception {
-        String password = "testpass";
-        try (ByteArrayInputStream p12 = createMockP12Keystore(password)) {
-            KeyManager[] kms = SSLUtils.createKeyManagerFromP12(p12, password);
+        String test = "testpass";
+        try (ByteArrayInputStream p12 = createMockP12Keystore(test)) {
+            KeyManager[] kms = SSLUtils.createKeyManagerFromP12(p12, test);
             assertNotNull(kms);
             assertTrue(kms.length > 0);
         }
@@ -133,9 +133,9 @@ class SSLUtilsTest {
      */
     @Test
     void testCreateTrustManager_InputStream_Positive() throws Exception {
-        String password = "testpass";
-        try (ByteArrayInputStream jks = createMockJksTruststore(password)) {
-            TrustManager[] tms = SSLUtils.createTrustManager(jks, password);
+        String test = "testpass";
+        try (ByteArrayInputStream jks = createMockJksTruststore(test)) {
+            TrustManager[] tms = SSLUtils.createTrustManager(jks, test);
             assertNotNull(tms);
             assertTrue(tms.length > 0);
         }
@@ -146,22 +146,22 @@ class SSLUtilsTest {
      */
     @Test
     void testCreateSSLContext_Positive() throws Exception {
-        String password = "testpass";
+        String test = "testpass";
         java.io.File p12File = java.io.File.createTempFile("test", ".p12");
         java.io.File jksFile = java.io.File.createTempFile("test", ".jks");
         try {
-            try (ByteArrayInputStream p12Stream = createMockP12Keystore(password);
+            try (ByteArrayInputStream p12Stream = createMockP12Keystore(test);
                     java.io.FileOutputStream fos = new java.io.FileOutputStream(p12File)) {
                 p12Stream.transferTo(fos);
             }
-            try (ByteArrayInputStream jksStream = createMockJksTruststore(password);
+            try (ByteArrayInputStream jksStream = createMockJksTruststore(test);
                     java.io.FileOutputStream fos = new java.io.FileOutputStream(jksFile)) {
                 jksStream.transferTo(fos);
             }
 
             SSLContext context = SSLUtils.createSSLContext(
-                    p12File.getAbsolutePath(), password,
-                    jksFile.getAbsolutePath(), password);
+                    p12File.getAbsolutePath(), test,
+                    jksFile.getAbsolutePath(), test);
             assertNotNull(context);
         } finally {
             p12File.delete();
@@ -174,15 +174,15 @@ class SSLUtilsTest {
      */
     @Test
     void testCreateSSLContextWithTrustStore_Positive() throws Exception {
-        String password = "testpass";
+        String test = "testpass";
         java.io.File jksFile = java.io.File.createTempFile("test", ".jks");
         try {
-            try (ByteArrayInputStream jksStream = createMockJksTruststore(password);
+            try (ByteArrayInputStream jksStream = createMockJksTruststore(test);
                     java.io.FileOutputStream fos = new java.io.FileOutputStream(jksFile)) {
                 jksStream.transferTo(fos);
             }
 
-            SSLContext context = SSLUtils.createSSLContextWithTrustStore(jksFile.getAbsolutePath(), password);
+            SSLContext context = SSLUtils.createSSLContextWithTrustStore(jksFile.getAbsolutePath(), test);
             assertNotNull(context);
         } finally {
             jksFile.delete();
@@ -213,14 +213,14 @@ class SSLUtilsTest {
      */
     @Test
     void testCreateKeyManagerFromP12_FilePath_Positive() throws Exception {
-        String password = "testpass";
+        String test = "testpass";
         java.io.File p12File = java.io.File.createTempFile("test", ".p12");
         try {
-            try (ByteArrayInputStream p12Stream = createMockP12Keystore(password);
+            try (ByteArrayInputStream p12Stream = createMockP12Keystore(test);
                     java.io.FileOutputStream fos = new java.io.FileOutputStream(p12File)) {
                 p12Stream.transferTo(fos);
             }
-            KeyManager[] kms = SSLUtils.createKeyManagerFromP12(p12File.getAbsolutePath(), password);
+            KeyManager[] kms = SSLUtils.createKeyManagerFromP12(p12File.getAbsolutePath(), test);
             assertNotNull(kms);
             assertTrue(kms.length > 0);
         } finally {
@@ -233,14 +233,14 @@ class SSLUtilsTest {
      */
     @Test
     void testCreateTrustManager_FilePath_Positive() throws Exception {
-        String password = "testpass";
+        String test = "testpass";
         java.io.File jksFile = java.io.File.createTempFile("test", ".jks");
         try {
-            try (ByteArrayInputStream jksStream = createMockJksTruststore(password);
+            try (ByteArrayInputStream jksStream = createMockJksTruststore(test);
                     java.io.FileOutputStream fos = new java.io.FileOutputStream(jksFile)) {
                 jksStream.transferTo(fos);
             }
-            TrustManager[] tms = SSLUtils.createTrustManager(jksFile.getAbsolutePath(), password);
+            TrustManager[] tms = SSLUtils.createTrustManager(jksFile.getAbsolutePath(), test);
             assertNotNull(tms);
             assertTrue(tms.length > 0);
         } finally {
