@@ -33,9 +33,9 @@ class GRPCServerTest {
         when(mockNestedProps.getProperty(anyString())).thenReturn("test");
 
         try (MockedStatic<PropertyUtil> propertyUtilMockedStatic = mockStatic(PropertyUtil.class);
-                MockedStatic<SSLUtils> sslUtilsMockedStatic = mockStatic(SSLUtils.class);
-                MockedStatic<ServerBuilder> serverBuilderMockedStatic = mockStatic(ServerBuilder.class);
-                MockedStatic<GRPCUtils> grpcUtilsMockedStatic = mockStatic(GRPCUtils.class)) {
+             MockedStatic<SSLUtils> sslUtilsMockedStatic = mockStatic(SSLUtils.class);
+             MockedStatic<ServerBuilder> serverBuilderMockedStatic = mockStatic(ServerBuilder.class);
+             MockedStatic<GRPCUtils> grpcUtilsMockedStatic = mockStatic(GRPCUtils.class)) {
 
             propertyUtilMockedStatic
                     .when(() -> PropertyUtil.getPropertyBooleanValue(GRPCServer.SERVER_MTLS_ENABLED, GRPCServer.FALSE))
@@ -59,12 +59,20 @@ class GRPCServerTest {
                     .when(() -> PropertyUtil.getPropertyValue(anyString(), anyString()))
                     .thenReturn("300");
 
+            X509KeyManager mockKeyManager = mock(X509KeyManager.class);
+            X509TrustManager mockTrustManager = mock(X509TrustManager.class);
             sslUtilsMockedStatic
                     .when(() -> SSLUtils.createKeyManagerFromP12(any(String.class), any(String.class)))
-                    .thenReturn(new KeyManager[] {mock(X509KeyManager.class)});
+                    .thenReturn(new KeyManager[] {mockKeyManager});
             sslUtilsMockedStatic
                     .when(() -> SSLUtils.createTrustManager(any(String.class), any(String.class)))
-                    .thenReturn(new TrustManager[] {mock(X509TrustManager.class)});
+                    .thenReturn(new TrustManager[] {mockTrustManager});
+            sslUtilsMockedStatic
+                    .when(() -> SSLUtils.extractX509KeyManager(any()))
+                    .thenReturn(mockKeyManager);
+            sslUtilsMockedStatic
+                    .when(() -> SSLUtils.extractX509TrustManager(any()))
+                    .thenReturn(mockTrustManager);
             sslUtilsMockedStatic
                     .when(() -> SSLUtils.createSSLContext(any(String.class), any(String.class), any(String.class), any(String.class)))
                     .thenReturn(mock(SSLContext.class));
@@ -83,7 +91,7 @@ class GRPCServerTest {
             // it builds a java.net.http.HttpClient with an SSLContext derived from truststore
             // properties, which isn't meaningful in this unit test and otherwise NPEs.
             try (MockedConstruction<OcspCertificateVerificationServiceImpl> ignoredOcsp =
-                    mockConstruction(OcspCertificateVerificationServiceImpl.class)) {
+                         mockConstruction(OcspCertificateVerificationServiceImpl.class)) {
                 GRPCServer server = new GRPCServer(sharedHeaders);
                 assertNotNull(server);
             }
@@ -96,9 +104,9 @@ class GRPCServerTest {
         when(mockNestedProps.getProperty(anyString())).thenReturn("test");
 
         try (MockedStatic<PropertyUtil> propertyUtilMockedStatic = mockStatic(PropertyUtil.class);
-                MockedStatic<SSLUtils> sslUtilsMockedStatic = mockStatic(SSLUtils.class);
-                MockedStatic<ServerBuilder> serverBuilderMockedStatic = mockStatic(ServerBuilder.class);
-                MockedStatic<GRPCUtils> grpcUtilsMockedStatic = mockStatic(GRPCUtils.class)) {
+             MockedStatic<SSLUtils> sslUtilsMockedStatic = mockStatic(SSLUtils.class);
+             MockedStatic<ServerBuilder> serverBuilderMockedStatic = mockStatic(ServerBuilder.class);
+             MockedStatic<GRPCUtils> grpcUtilsMockedStatic = mockStatic(GRPCUtils.class)) {
 
             propertyUtilMockedStatic
                     .when(() -> PropertyUtil.getPropertyBooleanValue(GRPCServer.SERVER_MTLS_ENABLED, GRPCServer.FALSE))
@@ -132,6 +140,12 @@ class GRPCServerTest {
                     .when(() -> SSLUtils.createTrustManager(anyString(), anyString()))
                     .thenReturn(new TrustManager[] {mockTrustManager});
             sslUtilsMockedStatic
+                    .when(() -> SSLUtils.extractX509KeyManager(any()))
+                    .thenReturn(mockKeyManager);
+            sslUtilsMockedStatic
+                    .when(() -> SSLUtils.extractX509TrustManager(any()))
+                    .thenReturn(mockTrustManager);
+            sslUtilsMockedStatic
                     .when(() -> SSLUtils.createSSLContext(anyString(), anyString(), anyString(), anyString()))
                     .thenReturn(mock(SSLContext.class));
 
@@ -149,7 +163,7 @@ class GRPCServerTest {
             // it builds a java.net.http.HttpClient with an SSLContext derived from truststore
             // properties, which isn't meaningful in this unit test and otherwise NPEs.
             try (MockedConstruction<OcspCertificateVerificationServiceImpl> ignoredOcsp =
-                    mockConstruction(OcspCertificateVerificationServiceImpl.class)) {
+                         mockConstruction(OcspCertificateVerificationServiceImpl.class)) {
                 GRPCServer server = new GRPCServer(sharedHeaders);
                 assertNotNull(server);
             }
