@@ -33,6 +33,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 
 import java.util.Set;
+import org.apache.jena.sparql.core.DatasetGraphFactory;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.junit.jupiter.api.Test;
 import uk.gov.dbt.ndtp.federator.common.checksum.PayloadChecksumUtil;
@@ -40,8 +41,8 @@ import uk.gov.dbt.ndtp.federator.server.grpc.LimitedServerCallStreamObserver;
 import uk.gov.dbt.ndtp.federator.server.interfaces.StreamObservable;
 import uk.gov.dbt.ndtp.federator.server.processor.kafka.RdfKafkaEventMessageProcessor;
 import uk.gov.dbt.ndtp.grpc.KafkaByteBatch;
-import uk.gov.dbt.ndtp.secure.agent.payloads.RdfPayload;
-import uk.gov.dbt.ndtp.secure.agent.sources.kafka.KafkaEvent;
+import uk.gov.dbt.ndtp.federator.eventsource.payloads.RdfPayload;
+import uk.gov.dbt.ndtp.federator.eventsource.kafka.KafkaEvent;
 
 class RdfKafkaEventMessageProcessorTest {
 
@@ -49,10 +50,21 @@ class RdfKafkaEventMessageProcessorTest {
     final Set<String> sharedHeaders = Set.of();
     final RdfKafkaEventMessageProcessor cut = new RdfKafkaEventMessageProcessor(mockObserver, sharedHeaders);
 
+    /**
+     * A minimal, valid, serialisable RdfPayload fixture - an empty RDF dataset.
+     * production code's serializer does not (and per Kafka Serializer convention,
+     * arguably should not have to) special-case a null RdfPayload value, so fixtures
+     * exercising the "happy path" / "missing key" / "checksum" scenarios need a real
+     * payload here rather than null.
+     */
+    private static RdfPayload emptyPayload() {
+        return new RdfPayload(DatasetGraphFactory.create());
+    }
+
     void test_process_happyPath() {
         // given
         KafkaEvent<String, RdfPayload> message =
-                new KafkaEvent<>(new ConsumerRecord<>("topic", 1, 1, "key", null), null);
+                new KafkaEvent<>(new ConsumerRecord<>("topic", 1, 1, "key", emptyPayload()));
         // when
         cut.process(message);
         // then
@@ -72,7 +84,7 @@ class RdfKafkaEventMessageProcessorTest {
     void test_process_missingKey() {
         // given
         KafkaEvent<String, RdfPayload> message =
-                new KafkaEvent<>(new ConsumerRecord<>("topic", 1, 1, null, null), null);
+                new KafkaEvent<>(new ConsumerRecord<>("topic", 1, 1, null, emptyPayload()));
 
         // when
         cut.process(message);
@@ -84,7 +96,7 @@ class RdfKafkaEventMessageProcessorTest {
     void test_process_setsPayloadChecksum() {
         // given
         KafkaEvent<String, RdfPayload> message = new KafkaEvent<>(
-                new ConsumerRecord<>("topic", 1, 1, "key", null), null);
+                new ConsumerRecord<>("topic", 1, 1, "key", emptyPayload()));
         // when
         cut.process(message);
         // then — verify batch sent to observer has checksum field set
@@ -98,7 +110,7 @@ class RdfKafkaEventMessageProcessorTest {
     void test_process_checksumMatchesPayload() {
         // given
         KafkaEvent<String, RdfPayload> message = new KafkaEvent<>(
-                new ConsumerRecord<>("topic", 1, 1, "key", null), null);
+                new ConsumerRecord<>("topic", 1, 1, "key", emptyPayload()));
         // capture the batch sent to observer
         var batchCaptor = org.mockito.ArgumentCaptor
                 .forClass(KafkaByteBatch.class);

@@ -13,7 +13,7 @@ import uk.gov.dbt.ndtp.federator.server.processor.MessageProcessor;
 import uk.gov.dbt.ndtp.grpc.FileStreamEvent;
 import uk.gov.dbt.ndtp.grpc.KafkaByteBatch;
 import uk.gov.dbt.ndtp.grpc.StreamWarning;
-import uk.gov.dbt.ndtp.secure.agent.sources.kafka.KafkaEvent;
+import uk.gov.dbt.ndtp.federator.eventsource.kafka.KafkaEvent;
 
 /**
  * Reads a file path from the Kafka event value and streams the file contents as one or more

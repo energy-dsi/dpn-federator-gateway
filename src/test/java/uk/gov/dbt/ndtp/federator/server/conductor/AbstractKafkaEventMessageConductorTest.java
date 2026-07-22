@@ -28,7 +28,7 @@ package uk.gov.dbt.ndtp.federator.server.conductor;
 import static org.apache.kafka.common.record.TimestampType.NO_TIMESTAMP_TYPE;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static uk.gov.dbt.ndtp.secure.agent.sources.IANodeHeaders.SECURITY_LABEL;
+import static uk.gov.dbt.ndtp.federator.eventsource.IANodeHeaders.SECURITY_LABEL;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -42,7 +42,7 @@ import org.mockito.Mockito;
 import uk.gov.dbt.ndtp.federator.common.model.dto.AttributesDTO;
 import uk.gov.dbt.ndtp.federator.server.consumer.MessageConsumer;
 import uk.gov.dbt.ndtp.federator.server.processor.MessageProcessor;
-import uk.gov.dbt.ndtp.secure.agent.sources.kafka.KafkaEvent;
+import uk.gov.dbt.ndtp.federator.eventsource.kafka.KafkaEvent;
 
 /**
  * Unit tests for AbstractKafkaEventMessageConductor focusing on header-based filtering logic in isEventAllowed().
@@ -55,7 +55,7 @@ class AbstractKafkaEventMessageConductorTest {
         });
         ConsumerRecord<String, String> consumerRecord = new ConsumerRecord<>(
                 "topic", 1, 1L, 1L, NO_TIMESTAMP_TYPE, 0, 0, "key", null, headers, Optional.empty());
-        return new KafkaEvent<>(consumerRecord, null);
+        return new KafkaEvent<>(consumerRecord);
     }
 
     private AttributesDTO attr(String name, String value) {

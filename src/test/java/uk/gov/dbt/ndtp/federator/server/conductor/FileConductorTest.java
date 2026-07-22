@@ -21,7 +21,7 @@ import uk.gov.dbt.ndtp.federator.server.consumer.MessageConsumer;
 import uk.gov.dbt.ndtp.federator.server.interfaces.StreamObservable;
 import uk.gov.dbt.ndtp.federator.server.processor.MessageProcessor;
 import uk.gov.dbt.ndtp.grpc.FileChunk;
-import uk.gov.dbt.ndtp.secure.agent.sources.kafka.KafkaEvent;
+import uk.gov.dbt.ndtp.federator.eventsource.kafka.KafkaEvent;
 
 class FileConductorTest {
 

@@ -19,7 +19,7 @@ import uk.gov.dbt.ndtp.federator.common.utils.ObjectMapperUtil;
 import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
 import uk.gov.dbt.ndtp.federator.server.interfaces.StreamObservable;
 import uk.gov.dbt.ndtp.grpc.FileStreamEvent;
-import uk.gov.dbt.ndtp.secure.agent.sources.kafka.KafkaEvent;
+import uk.gov.dbt.ndtp.federator.eventsource.kafka.KafkaEvent;
 
 class FileKafkaEventMessageProcessorTest {
 

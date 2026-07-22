@@ -55,10 +55,10 @@ import uk.gov.dbt.ndtp.federator.exceptions.LabelException;
 import uk.gov.dbt.ndtp.federator.server.consumer.ClientTopicOffsets;
 import uk.gov.dbt.ndtp.federator.server.grpc.LimitedServerCallStreamObserver;
 import uk.gov.dbt.ndtp.federator.server.interfaces.StreamObservable;
-import uk.gov.dbt.ndtp.secure.agent.payloads.RdfPayload;
-import uk.gov.dbt.ndtp.secure.agent.sources.kafka.KafkaEvent;
-import uk.gov.dbt.ndtp.secure.agent.sources.kafka.KafkaEventSource;
-import uk.gov.dbt.ndtp.secure.agent.sources.kafka.serializers.RdfPayloadDeserializer;
+import uk.gov.dbt.ndtp.federator.eventsource.payloads.RdfPayload;
+import uk.gov.dbt.ndtp.federator.eventsource.kafka.KafkaEvent;
+import uk.gov.dbt.ndtp.federator.eventsource.kafka.KafkaEventSource;
+import uk.gov.dbt.ndtp.federator.eventsource.kafka.serializers.RdfPayloadDeserializer;
 
 class RdfMessageConductorTest {
 
@@ -142,7 +142,7 @@ class RdfMessageConductorTest {
     void test_processMessages_happyPath_filteredOutMessage() throws LabelException {
         // given
         KafkaEvent<String, RdfPayload> message =
-                new KafkaEvent<>(new ConsumerRecord<>("topic", 1, 1, "key", null), null);
+                new KafkaEvent<>(new ConsumerRecord<>("topic", 1, 1, "key", null));
         when(mockEventSource.isClosed()).thenReturn(false).thenReturn(true);
         when(mockEventSource.poll(any())).thenReturn(message);
         // Set a filter that will not match the message (e.g., header "foo" = "bar")

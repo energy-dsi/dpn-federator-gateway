@@ -39,9 +39,9 @@ import uk.gov.dbt.ndtp.federator.server.interfaces.StreamObservable;
 import uk.gov.dbt.ndtp.federator.server.processor.MessageProcessor;
 import uk.gov.dbt.ndtp.federator.server.processor.kafka.RdfKafkaEventMessageProcessor;
 import uk.gov.dbt.ndtp.grpc.KafkaByteBatch;
-import uk.gov.dbt.ndtp.secure.agent.payloads.RdfPayload;
-import uk.gov.dbt.ndtp.secure.agent.sources.kafka.KafkaEvent;
-import uk.gov.dbt.ndtp.secure.agent.sources.kafka.serializers.RdfPayloadDeserializer;
+import uk.gov.dbt.ndtp.federator.eventsource.payloads.RdfPayload;
+import uk.gov.dbt.ndtp.federator.eventsource.kafka.KafkaEvent;
+import uk.gov.dbt.ndtp.federator.eventsource.kafka.serializers.RdfPayloadDeserializer;
 
 /**
  * Message processor for Kafka Events (of RDF Payloads)

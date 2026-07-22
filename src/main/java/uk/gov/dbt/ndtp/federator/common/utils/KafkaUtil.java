@@ -31,10 +31,10 @@ import java.util.Optional;
 import java.util.Properties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import uk.gov.dbt.ndtp.secure.agent.sources.kafka.KafkaEventSource;
-import uk.gov.dbt.ndtp.secure.agent.sources.kafka.policies.KafkaReadPolicies;
-import uk.gov.dbt.ndtp.secure.agent.sources.kafka.policies.KafkaReadPolicy;
-import uk.gov.dbt.ndtp.secure.agent.sources.kafka.sinks.KafkaSink;
+import uk.gov.dbt.ndtp.federator.eventsource.kafka.KafkaEventSource;
+import uk.gov.dbt.ndtp.federator.eventsource.kafka.policies.KafkaReadPolicies;
+import uk.gov.dbt.ndtp.federator.eventsource.kafka.policies.KafkaReadPolicy;
+import uk.gov.dbt.ndtp.federator.eventsource.kafka.sinks.KafkaSink;
 
 /**
  * Utility class for Kafka.

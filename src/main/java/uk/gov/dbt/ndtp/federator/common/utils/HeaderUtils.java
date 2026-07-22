@@ -26,7 +26,7 @@
 
 package uk.gov.dbt.ndtp.federator.common.utils;
 
-import static uk.gov.dbt.ndtp.secure.agent.sources.IANodeHeaders.*;
+import static uk.gov.dbt.ndtp.federator.eventsource.IANodeHeaders.*;
 
 import java.util.List;
 import java.util.Map;
@@ -36,7 +36,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import uk.gov.dbt.ndtp.federator.exceptions.LabelException;
 import uk.gov.dbt.ndtp.grpc.Headers;
-import uk.gov.dbt.ndtp.secure.agent.sources.Header;
+import uk.gov.dbt.ndtp.federator.eventsource.Header;
 
 /**
  * Utility class for working with headers

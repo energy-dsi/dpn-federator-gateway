@@ -27,6 +27,12 @@
 package uk.gov.dbt.ndtp.federator.common.utils;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static uk.gov.dbt.ndtp.federator.common.utils.TestPropertyUtil.clearProperties;
 import static uk.gov.dbt.ndtp.federator.common.utils.TestPropertyUtil.setUpProperties;
 
@@ -34,17 +40,17 @@ import java.io.IOException;
 import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Properties;
+import org.apache.kafka.clients.consumer.Consumer;
+import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
-import uk.gov.dbt.ndtp.secure.agent.sources.kafka.AbstractKafkaEventSourceBuilder;
-import uk.gov.dbt.ndtp.secure.agent.sources.kafka.KafkaEventSource;
-import uk.gov.dbt.ndtp.secure.agent.sources.kafka.policies.KafkaReadPolicy;
-import uk.gov.dbt.ndtp.secure.agent.sources.kafka.policies.automatic.AutoFromBeginning;
-import uk.gov.dbt.ndtp.secure.agent.sources.kafka.policies.automatic.AutoFromOffset;
-import uk.gov.dbt.ndtp.secure.agent.sources.kafka.sinks.KafkaSink;
+import uk.gov.dbt.ndtp.federator.eventsource.kafka.KafkaEventSource;
+import uk.gov.dbt.ndtp.federator.eventsource.kafka.policies.KafkaReadPolicy;
+import uk.gov.dbt.ndtp.federator.eventsource.kafka.sinks.KafkaSink;
 
 class KafkaUtilTest {
     @BeforeEach
@@ -59,26 +65,48 @@ class KafkaUtilTest {
 
     @Test
     void test_getReadPolicy_ifOffsetZero_readFromBeginning() {
+        // given
+        Consumer<String, String> mockConsumer = mock(Consumer.class);
+        List<TopicPartition> partitions = List.of(new TopicPartition("example-topic", 0));
+
         // when
         KafkaReadPolicy<String, String> actualPolicy = KafkaUtil.getReadPolicy(0L);
+        actualPolicy.startReading(mockConsumer, partitions);
+
         // then
-        assertEquals(AutoFromBeginning.class, actualPolicy.getClass());
+        verify(mockConsumer).seekToBeginning(partitions);
+        verify(mockConsumer, never()).seek(any(TopicPartition.class), anyLong());
     }
 
     @Test
     void test_getReadPolicy_ifOffsetNonZero_readFromOffset() {
+        // given
+        Consumer<String, String> mockConsumer = mock(Consumer.class);
+        TopicPartition partition = new TopicPartition("example-topic", 0);
+        List<TopicPartition> partitions = List.of(partition);
+
         // when
         KafkaReadPolicy<String, String> actualPolicy = KafkaUtil.getReadPolicy(5L);
+        actualPolicy.startReading(mockConsumer, partitions);
+
         // then
-        assertEquals(AutoFromOffset.class, actualPolicy.getClass());
+        verify(mockConsumer).seek(partition, 5L);
+        verify(mockConsumer, never()).seekToBeginning(any());
     }
 
     @Test
     void test_getReadPolicy_default_readFromBeginning() {
+        // given
+        Consumer<String, String> mockConsumer = mock(Consumer.class);
+        List<TopicPartition> partitions = List.of(new TopicPartition("example-topic", 0));
+
         // when
         KafkaReadPolicy<String, String> actualPolicy = KafkaUtil.getReadPolicy();
+        actualPolicy.startReading(mockConsumer, partitions);
+
         // then
-        assertEquals(AutoFromBeginning.class, actualPolicy.getClass());
+        verify(mockConsumer).seekToBeginning(partitions);
+        verify(mockConsumer, never()).seek(any(TopicPartition.class), anyLong());
     }
 
     @Nested
@@ -141,14 +169,15 @@ class KafkaUtilTest {
 
             Properties actual = getProperties(underTest);
 
-            Properties expected = new Properties();
-
-            assertEquals(expected, actual);
+            // production code leaves the field unset (null) when no kafka.additional.* properties
+            // are configured - getKafkaSinkBuilder() only calls producerConfig(...) via
+            // Optional::ifPresent, so it's never invoked at all in this case.
+            assertNull(actual);
         }
 
         private static Properties getProperties(KafkaSink.KafkaSinkBuilder<?, ?> builder)
                 throws NoSuchFieldException, IllegalAccessException {
-            Field propertiesField = KafkaSink.KafkaSinkBuilder.class.getDeclaredField("properties");
+            Field propertiesField = KafkaSink.KafkaSinkBuilder.class.getDeclaredField("producerConfig");
             propertiesField.setAccessible(true);
             return (Properties) propertiesField.get(builder);
         }
@@ -215,14 +244,15 @@ class KafkaUtilTest {
 
             Properties actual = getProperties(underTest);
 
-            Properties expected = new Properties();
-
-            assertEquals(expected, actual);
+            // production code leaves the field unset (null) when no kafka.additional.* properties
+            // are configured - getKafkaSourceBuilder() only calls consumerConfig(...) via
+            // Optional::ifPresent, so it's never invoked at all in this case.
+            assertNull(actual);
         }
 
         private static Properties getProperties(KafkaEventSource.Builder<?, ?> builder)
                 throws NoSuchFieldException, IllegalAccessException {
-            Field propertiesField = AbstractKafkaEventSourceBuilder.class.getDeclaredField("properties");
+            Field propertiesField = KafkaEventSource.Builder.class.getDeclaredField("consumerConfig");
             propertiesField.setAccessible(true);
             return (Properties) propertiesField.get(builder);
         }

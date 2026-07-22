@@ -24,8 +24,8 @@ import org.slf4j.LoggerFactory;
 import uk.gov.dbt.ndtp.federator.common.model.dto.AttributesDTO;
 import uk.gov.dbt.ndtp.federator.server.consumer.MessageConsumer;
 import uk.gov.dbt.ndtp.federator.server.processor.MessageProcessor;
-import uk.gov.dbt.ndtp.secure.agent.sources.Event;
-import uk.gov.dbt.ndtp.secure.agent.sources.Header;
+import uk.gov.dbt.ndtp.federator.eventsource.Event;
+import uk.gov.dbt.ndtp.federator.eventsource.Header;
 
 /**
  * Abstract representation of a message processor for Secure Agent Events (with Key/Event)

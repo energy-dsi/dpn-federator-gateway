@@ -12,8 +12,8 @@ import static org.mockito.Mockito.*;
 import java.time.Duration;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import uk.gov.dbt.ndtp.secure.agent.sources.Event;
-import uk.gov.dbt.ndtp.secure.agent.sources.EventSource;
+import uk.gov.dbt.ndtp.federator.eventsource.Event;
+import uk.gov.dbt.ndtp.federator.eventsource.EventSource;
 
 class EventMessageConsumerTest {
 

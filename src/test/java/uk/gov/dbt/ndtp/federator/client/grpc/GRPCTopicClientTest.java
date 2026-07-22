@@ -44,7 +44,7 @@ import uk.gov.dbt.ndtp.federator.exceptions.RetryableException;
 import uk.gov.dbt.ndtp.grpc.FederatorServiceGrpc;
 import uk.gov.dbt.ndtp.grpc.KafkaByteBatch;
 import uk.gov.dbt.ndtp.grpc.TopicRequest;
-import uk.gov.dbt.ndtp.secure.agent.sources.kafka.sinks.KafkaSink;
+import uk.gov.dbt.ndtp.federator.eventsource.kafka.sinks.KafkaSink;
 
 class GRPCTopicClientTest {
     private static final String SERVER_NAME = "TEST_SERVER_NAME";
