@@ -14,6 +14,9 @@ import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.Collection;
 import java.util.Deque;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Properties;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
@@ -21,6 +24,7 @@ import org.apache.kafka.clients.consumer.ConsumerRebalanceListener;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -55,8 +59,23 @@ public class KafkaEventSource<Key, Value> implements EventSource<Key, Value> {
 
             @Override
             public void onPartitionsAssigned(Collection<TopicPartition> partitions) {
-                if (!partitions.isEmpty()) {
-                    readPolicy.startReading(consumer, partitions);
+                if (partitions.isEmpty()) {
+                    return;
+                }
+                // Only apply the configured read policy to partitions that have no existing
+                // committed offset for this consumer group. Previously this ran unconditionally
+                // on every session, which meant every new job run silently overrode Kafka's
+                // normal "resume from where this group last committed" behaviour - including
+                // overriding any manual offset reset done via kafka-consumer-groups
+                // --reset-offsets, since that reset offset itself looks identical to "no
+                // committed offset" only on the very first read after the reset, not on
+                // subsequent ones once auto-commit has moved it forward again.
+                Map<TopicPartition, OffsetAndMetadata> committed = consumer.committed(new HashSet<>(partitions));
+                List<TopicPartition> uncommitted = partitions.stream()
+                        .filter(tp -> committed.get(tp) == null)
+                        .toList();
+                if (!uncommitted.isEmpty()) {
+                    readPolicy.startReading(consumer, uncommitted);
                 }
             }
         });

@@ -11,7 +11,6 @@ import org.apache.jena.rdfpatch.RDFPatch;
 import org.apache.jena.rdfpatch.RDFPatchOps;
 import org.apache.jena.riot.Lang;
 import org.apache.jena.riot.RDFDataMgr;
-import org.apache.jena.sparql.core.DatasetGraph;
 import org.apache.kafka.common.errors.SerializationException;
 import org.apache.kafka.common.header.Headers;
 import org.apache.kafka.common.serialization.Serializer;
@@ -38,20 +37,29 @@ public class RdfPayloadSerializer implements Serializer<RdfPayload> {
 
     @Override
     public byte[] serialize(String topic, Headers headers, RdfPayload payload) {
-        try {
-            if (payload.isDataset()) {
-                return serializeDataset(payload.getDataset());
-            }
-            return serializePatch(headers, payload);
-        } catch (RdfPayloadException e) {
-            throw unableToSerialize(topic, e);
+        if (payload.isDataset()) {
+            return serializeDataset(topic, payload);
         }
+        return serializePatch(headers, payload);
     }
 
-    private byte[] serializeDataset(DatasetGraph dataset) {
-        ByteArrayOutputStream output = new ByteArrayOutputStream();
-        RDFDataMgr.write(output, dataset, defaultLang);
-        return output.toByteArray();
+    private byte[] serializeDataset(String topic, RdfPayload payload) {
+        try {
+            ByteArrayOutputStream output = new ByteArrayOutputStream();
+            RDFDataMgr.write(output, payload.getDataset(), defaultLang);
+            return output.toByteArray();
+        } catch (RdfPayloadException notParseable) {
+            // The content wasn't valid RDF for whatever Lang the Content-Type header
+            // selected - rather than failing the whole message, fall back to the original
+            // raw bytes, mirroring the same fallback already used in serializePatch() below.
+            // Without this, any non-RDF payload on this topic (or one whose Content-Type
+            // doesn't match its actual content) would be rejected outright instead of being
+            // passed through unchanged, which is the original library's actual behaviour.
+            if (payload.hasRawData()) {
+                return payload.getRawData();
+            }
+            throw unableToSerialize(topic, notParseable);
+        }
     }
 
     private byte[] serializePatch(Headers headers, RdfPayload payload) {
