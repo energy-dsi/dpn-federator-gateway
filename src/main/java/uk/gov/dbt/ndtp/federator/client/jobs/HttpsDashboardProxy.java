@@ -1,0 +1,147 @@
+// SPDX-License-Identifier: Apache-2.0
+// © Crown Copyright 2025. This work has been developed by the National Digital Twin Programme
+// and is legally attributed to the Department for Business and Trade (UK) as the governing entity.
+
+package uk.gov.dbt.ndtp.federator.client.jobs;
+
+import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpHandler;
+import com.sun.net.httpserver.HttpsConfigurator;
+import com.sun.net.httpserver.HttpsParameters;
+import com.sun.net.httpserver.HttpsServer;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.InetSocketAddress;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpRequest.BodyPublishers;
+import java.net.http.HttpResponse;
+import java.net.http.HttpResponse.BodyHandlers;
+import java.time.Duration;
+import java.util.Locale;
+import java.util.Set;
+import java.util.concurrent.Executors;
+import javax.net.ssl.KeyManager;
+import javax.net.ssl.SSLContext;
+import lombok.extern.slf4j.Slf4j;
+import uk.gov.dbt.ndtp.federator.common.utils.SSLUtils;
+
+/**
+ * Minimal HTTPS reverse proxy that terminates TLS in front of JobRunr's embedded dashboard.
+ * <p>
+ * JobRunr's dashboard server (built on {@code com.sun.net.httpserver.HttpServer}) has no TLS
+ * support in its public configuration API. This listens on a public HTTPS port using a
+ * self-signed PKCS12 keystore and forwards every request to the plain-HTTP dashboard running on
+ * an internal-only port, streaming the response body back rather than buffering it so the
+ * dashboard's SSE-based live updates keep working.
+ */
+@Slf4j
+public final class HttpsDashboardProxy {
+
+    private static final Set<String> HOP_BY_HOP_REQUEST_HEADERS =
+            Set.of("connection", "keep-alive", "te", "trailers", "transfer-encoding", "upgrade", "content-length",
+                    "host", "expect");
+    private static final Set<String> HOP_BY_HOP_RESPONSE_HEADERS =
+            Set.of("connection", "keep-alive", "transfer-encoding", "content-length");
+
+    private final HttpsServer server;
+    private final HttpClient client =
+            HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
+    private final String upstreamBaseUrl;
+
+    public HttpsDashboardProxy(int httpsPort, int upstreamPort, String p12FilePath, String p12Password) {
+        this.upstreamBaseUrl = "http://localhost:" + upstreamPort;
+        try {
+            KeyManager[] keyManagers = SSLUtils.createKeyManagerFromP12(p12FilePath, p12Password);
+            SSLContext sslContext = SSLContext.getInstance("TLS");
+            sslContext.init(keyManagers, null, null);
+
+            server = HttpsServer.create(new InetSocketAddress(httpsPort), 0);
+            server.setHttpsConfigurator(new HttpsConfigurator(sslContext) {
+                @Override
+                public void configure(HttpsParameters params) {
+                    params.setSSLParameters(getSSLContext().getDefaultSSLParameters());
+                }
+            });
+            server.createContext("/", new ProxyHandler());
+            // A null (default) executor handles every request sequentially on a single thread -
+            // one slow or long-lived request (e.g. the dashboard's SSE live-update stream) would
+            // then block every other request. Virtual threads give each request its own thread
+            // cheaply, matching the virtual-thread executor already used elsewhere for JobRunr
+            // (see DefaultJobSchedulerProvider/VirtualThreadJobRunrExecutor).
+            server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
+        } catch (Exception e) {
+            throw new IllegalStateException("Failed to initialise HTTPS dashboard proxy on port " + httpsPort, e);
+        }
+    }
+
+    public void start() {
+        server.start();
+        log.info("HTTPS dashboard proxy listening, forwarding to {}", upstreamBaseUrl);
+    }
+
+    public void stop() {
+        server.stop(0);
+    }
+
+    private final class ProxyHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) {
+            try {
+                URI upstreamUri = URI.create(upstreamBaseUrl + exchange.getRequestURI());
+                HttpRequest.Builder builder =
+                        HttpRequest.newBuilder(upstreamUri).timeout(Duration.ofSeconds(30));
+
+                exchange.getRequestHeaders().forEach((name, values) -> {
+                    if (!HOP_BY_HOP_REQUEST_HEADERS.contains(name.toLowerCase(Locale.ROOT))) {
+                        for (String value : values) {
+                            try {
+                                builder.header(name, value);
+                            } catch (IllegalArgumentException ignored) {
+                                // JDK HttpClient forbids setting some restricted headers directly; skip those.
+                            }
+                        }
+                    }
+                });
+
+                String method = exchange.getRequestMethod();
+                boolean hasBody = !("GET".equalsIgnoreCase(method) || "HEAD".equalsIgnoreCase(method));
+                builder.method(
+                        method,
+                        hasBody
+                                ? BodyPublishers.ofInputStream(exchange::getRequestBody)
+                                : BodyPublishers.noBody());
+
+                HttpResponse<InputStream> response = client.send(builder.build(), BodyHandlers.ofInputStream());
+
+                response.headers().map().forEach((name, values) -> {
+                    if (!HOP_BY_HOP_RESPONSE_HEADERS.contains(name.toLowerCase(Locale.ROOT))) {
+                        exchange.getResponseHeaders().put(name, values);
+                    }
+                });
+
+                // 0 = chunked transfer encoding; response length is unknown up front and this also
+                // lets SSE responses stream through as they're written rather than being buffered.
+                exchange.sendResponseHeaders(response.statusCode(), 0);
+                try (InputStream in = response.body();
+                        OutputStream out = exchange.getResponseBody()) {
+                    in.transferTo(out);
+                }
+            } catch (IOException | InterruptedException e) {
+                if (e instanceof InterruptedException) {
+                    Thread.currentThread().interrupt();
+                }
+                log.warn("Dashboard proxy request to {} failed: {}", exchange.getRequestURI(), e.toString());
+                try {
+                    exchange.sendResponseHeaders(502, -1);
+                } catch (IOException ignored) {
+                    // Best effort - connection may already be broken.
+                }
+            } finally {
+                exchange.close();
+            }
+        }
+    }
+}

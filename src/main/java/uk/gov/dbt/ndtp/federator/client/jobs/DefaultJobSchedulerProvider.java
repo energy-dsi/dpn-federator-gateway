@@ -37,6 +37,13 @@ import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
  *   <li>jobs.dashboard.enabled = true</li>
  *   <li>jobs.background.enabled = true</li>
  *   <li>jobs.storage.provider = memory</li>
+ *   <li>jobs.dashboard.https.enabled = false - fronts jobs.dashboard.port with HTTPS via
+ *       {@link HttpsDashboardProxy} (JobRunr's own dashboard has no TLS support). When enabled,
+ *       jobs.dashboard.port should be an internal-only port and jobs.dashboard.https.port the
+ *       one actually exposed.</li>
+ *   <li>jobs.dashboard.https.port = 8443</li>
+ *   <li>jobs.dashboard.https.p12FilePath - required when https enabled</li>
+ *   <li>jobs.dashboard.https.p12Password - required when https enabled</li>
  * </ul>
  * Currently only the in-memory storage provider is supported without additional dependencies.
  * </p>
@@ -51,12 +58,19 @@ public final class DefaultJobSchedulerProvider implements JobSchedulerProvider {
     private static final String PROP_DASHBOARD_PORT = "jobs.dashboard.port";
     private static final String PROP_BACKGROUND_ENABLED = "jobs.background.enabled";
     private static final String PROP_STORAGE_PROVIDER = "jobs.storage.provider"; // memory (default), future: redis, sql
+    // JobRunr's dashboard has no TLS support of its own (see HttpsDashboardProxy), so when enabled
+    // jobs.dashboard.port becomes an internal-only port and this proxy fronts it with HTTPS.
+    private static final String PROP_DASHBOARD_HTTPS_ENABLED = "jobs.dashboard.https.enabled";
+    private static final String PROP_DASHBOARD_HTTPS_PORT = "jobs.dashboard.https.port";
+    private static final String PROP_DASHBOARD_HTTPS_P12_FILE_PATH = "jobs.dashboard.https.p12FilePath";
+    private static final String PROP_DASHBOARD_HTTPS_P12_PASSWORD = "jobs.dashboard.https.p12Password";
     private final Object lifecycleLock = new Object();
     private boolean started = false;
     // Keep reference so we can close when stopping (for in-memory case)
     private AbstractStorageProvider storageProvider;
     private JobScheduler jobScheduler;
     private RecurringJobsAccess recurringJobsAccess;
+    private HttpsDashboardProxy httpsDashboardProxy;
 
     public DefaultJobSchedulerProvider() {
         // public constructor; instantiate and call ensureStarted() when needed
@@ -128,13 +142,24 @@ public final class DefaultJobSchedulerProvider implements JobSchedulerProvider {
             }
             jobScheduler = cfg.initialize().getJobScheduler();
 
+            boolean dashboardHttpsEnabled = dashboardEnabled
+                    && PropertyUtil.getPropertyBooleanValue(PROP_DASHBOARD_HTTPS_ENABLED, "false");
+            if (dashboardHttpsEnabled) {
+                int httpsPort = PropertyUtil.getPropertyIntValue(PROP_DASHBOARD_HTTPS_PORT, "8443");
+                String p12FilePath = PropertyUtil.getPropertyValue(PROP_DASHBOARD_HTTPS_P12_FILE_PATH);
+                String p12Password = PropertyUtil.getPropertyValue(PROP_DASHBOARD_HTTPS_P12_PASSWORD);
+                httpsDashboardProxy = new HttpsDashboardProxy(httpsPort, dashboardPort, p12FilePath, p12Password);
+                httpsDashboardProxy.start();
+            }
+
             started = true;
 
             log.info(
-                    "JobRunr initialised (storage={}, background={}, dashboard={})",
+                    "JobRunr initialised (storage={}, background={}, dashboard={}, dashboardHttps={})",
                     CONSTANT_PROVIDER_TYPE_MEMORY,
                     backgroundEnabled,
-                    dashboardEnabled);
+                    dashboardEnabled,
+                    dashboardHttpsEnabled);
 
             // Register a shutdown task
             ShutdownThread.register(() -> {
@@ -145,6 +170,13 @@ public final class DefaultJobSchedulerProvider implements JobSchedulerProvider {
     }
 
     private void shutdown() {
+        try {
+            if (httpsDashboardProxy != null) {
+                httpsDashboardProxy.stop();
+            }
+        } catch (Exception e) {
+            log.debug("Ignoring exception while stopping HTTPS dashboard proxy", e);
+        }
         try {
             JobRunr.destroy();
         } catch (Exception e) {
