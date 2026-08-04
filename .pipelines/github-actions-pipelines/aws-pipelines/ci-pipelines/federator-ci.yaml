@@ -1,0 +1,130 @@
+name: AWS Build, Sign & Push Images
+ 
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        type: choice
+        options: [dev, devtest, sit, preprod, prod]
+        required: true
+      cluster:
+        type: choice
+        options: [dpn01, dpn02]
+        required: true
+      awsRegion:
+        required: true
+      enablePIT:
+        type: boolean
+        default: false
+ 
+permissions:
+  id-token: write
+  contents: read
+ 
+env:
+  ENVIRONMENT: ${{ inputs.environment }}
+  CLUSTER: ${{ inputs.cluster }}
+  AWS_REGION: ${{ inputs.awsRegion }}
+ 
+  CLIENT_IMAGE: dpn-federator-client
+  SERVER_IMAGE: dpn-federator-server
+  IMAGE_TAG: ${{ github.run_number }}
+ 
+  PARAMETERS_FILE: .pipelines/github-actions-pipelines/aws-pipelines/config/${{ inputs.environment }}-${{ inputs.cluster }}.json
+ 
+jobs:
+ 
+# ------------------------------------------------
+# LOAD CONFIG + AWS AUTH
+# ------------------------------------------------
+  Prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+ 
+      - name: Load config JSON
+        run: |
+          set -e
+          jq -r 'keys[]' "$PARAMETERS_FILE" | while read k; do
+            echo "$k=$(jq -r ".\"$k\"" "$PARAMETERS_FILE")" >> $GITHUB_ENV
+          done
+ 
+      - name: AWS Authentication (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: $AWS_REGION
+ 
+      - run: aws sts get-caller-identity
+ 
+# ------------------------------------------------
+# BUILD & PUSH IMAGES (REGISTRY‑AGNOSTIC)
+# ------------------------------------------------
+  Build:
+    runs-on: ubuntu-latest
+    needs: Prepare
+ 
+    steps:
+      - uses: actions/checkout@v4
+ 
+      - name: Registry Login (Fully Parameterised)
+        run: |
+          echo "${{ secrets.REGISTRY_PASSWORD }}" | \
+            docker login "${{ secrets.REGISTRY_URL }}" \
+              --username "${{ secrets.REGISTRY_USERNAME }}" \
+              --password-stdin
+ 
+      - name: Build Client Image
+        run: |
+          docker build \
+            --build-arg BASE_REGISTRY=${BASE_REGISTRY} \
+            -f Dockerfile.client \
+            -t ${REGISTRY_URL}/${CLIENT_IMAGE}:${IMAGE_TAG} .
+ 
+      - name: Build Server Image
+        run: |
+          docker build \
+            --build-arg BASE_REGISTRY=${BASE_REGISTRY} \
+            -f Dockerfile.server \
+            -t ${REGISTRY_URL}/${SERVER_IMAGE}:${IMAGE_TAG} .
+ 
+      - name: Push Images
+        run: |
+          docker push ${REGISTRY_URL}/${CLIENT_IMAGE}:${IMAGE_TAG}
+          docker push ${REGISTRY_URL}/${SERVER_IMAGE}:${IMAGE_TAG}
+ 
+# ------------------------------------------------
+# IMAGE SIGNING (COSIGN)
+# ------------------------------------------------
+  Sign:
+    runs-on: ubuntu-latest
+    needs: Build
+ 
+    steps:
+      - uses: actions/checkout@v4
+ 
+      - name: Install Cosign
+        run: |
+          curl -sSL https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-amd64 \
+            -o cosign
+          chmod +x cosign
+          sudo mv cosign /usr/local/bin/
+ 
+      - name: Sign Images
+        env:
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+        run: |
+          cosign sign ${REGISTRY_URL}/${CLIENT_IMAGE}:${IMAGE_TAG}
+          cosign sign ${REGISTRY_URL}/${SERVER_IMAGE}:${IMAGE_TAG}
+ 
+# ------------------------------------------------
+# CLEANUP
+# ------------------------------------------------
+  Cleanup:
+    runs-on: ubuntu-latest
+    needs: Sign
+    if: always()
+    steps:
+      - run: |
+          docker rmi ${REGISTRY_URL}/${CLIENT_IMAGE}:${IMAGE_TAG} || true
+          docker rmi ${REGISTRY_URL}/${SERVER_IMAGE}:${IMAGE_TAG} || true

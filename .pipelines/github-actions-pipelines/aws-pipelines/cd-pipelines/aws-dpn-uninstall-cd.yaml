@@ -1,0 +1,207 @@
+name: DPN Platform Uninstall
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target Environment"
+        required: true
+        type: choice
+        options:
+          - dev
+          - devtest
+          - sit
+          - preprod
+          - prod
+
+      dpncluster:
+        description: "Target DPN Cluster"
+        required: true
+        type: choice
+        options:
+          - dpn01
+          - dpn02
+
+      roleArn:
+        description: "AWS IAM Role ARN"
+        required: true
+
+      region:
+        description: "AWS Region"
+        required: true
+
+env:
+  PARAMETERS_FILE: .pipelines/github-actions-pipelines/aws-pipelines/config/${{ inputs.environment }}-${{ inputs.dpncluster }}.json
+
+jobs:
+
+# -----------------------------------------------------
+# Job 1 — Precheck
+# -----------------------------------------------------
+  precheck:
+    name: Pre-Uninstall Checklist
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Operator Confirmation
+        run: |
+          echo "PRE‑UNINSTALL CHECKLIST"
+          echo "------------------------------------------------"
+          echo "Confirm ALL before proceeding:"
+          echo ""
+          echo "All CI workflows disabled:"
+          echo "  - Federator CI"
+          echo "  - Zookeeper CI"
+          echo "  - Kafka CI"
+          echo "  - Redis CI"
+          echo "  - Topic Creator CI"
+          echo ""
+          echo "All CD workflows disabled"
+          echo "No active data ingestion"
+          echo "Kafka topics drained"
+          echo "Backups completed"
+          echo ""
+          echo "Do NOT proceed unless all checks pass."
+
+# -----------------------------------------------------
+# Job 2 — Prepare (Auth + Config)
+# -----------------------------------------------------
+  prepare:
+    name: Prepare EKS Context
+    runs-on: ubuntu-latest
+    needs: precheck
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Load Config
+        run: |
+          echo "Loading config from $PARAMETERS_FILE"
+          for key in $(jq -r 'keys_unsorted | .[]' "$PARAMETERS_FILE"); do
+            value=$(jq -r ".\"$key\"" "$PARAMETERS_FILE")
+            echo "$key=$value" >> $GITHUB_ENV
+          done
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ inputs.roleArn }}
+          aws-region: ${{ inputs.region }}
+
+      - name: Update kubeconfig (EKS)
+        run: |
+          aws eks update-kubeconfig \
+            --name $EKS_CLUSTER \
+            --region ${{ inputs.region }}
+
+# -----------------------------------------------------
+# Job 3 — Approval (Environment Protection)
+# -----------------------------------------------------
+  approval:
+    name: Approval – Confirm Deletion Scope
+    runs-on: ubuntu-latest
+    needs: prepare
+    environment: dpn-uninstall-${{ inputs.environment }}
+
+    steps:
+      - name: Preview Helm Releases (READ-ONLY)
+        run: |
+          echo "===================================================="
+          echo "DPN PLATFORM UNINSTALL — APPROVAL REQUIRED"
+          echo "===================================================="
+
+          echo "Helm releases that will be deleted:"
+          echo "----------------------------------------------------"
+
+          helm list -n $NAMESPACE -q | \
+          grep -E '^(dpn-federator-client|dpn-federator-server|dpn-kafka|dpn-redis|dpn-zookeeper)' | \
+          while read -r release; do
+            echo "Helm uninstall: $release"
+          done
+
+          echo "----------------------------------------------------"
+          echo "NO resources deleted yet"
+          echo "===================================================="
+
+# -----------------------------------------------------
+# Job 4 — Uninstall
+# -----------------------------------------------------
+  uninstall:
+    name: Uninstall DPN Platform
+    runs-on: ubuntu-latest
+    needs: approval
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Load Config Again
+        run: |
+          for key in $(jq -r 'keys_unsorted | .[]' "$PARAMETERS_FILE"); do
+            value=$(jq -r ".\"$key\"" "$PARAMETERS_FILE")
+            echo "$key=$value" >> $GITHUB_ENV
+          done
+
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ inputs.roleArn }}
+          aws-region: ${{ inputs.region }}
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --name $EKS_CLUSTER \
+            --region ${{ inputs.region }}
+
+      - name: Helm Uninstall
+        run: |
+          helm list -n $NAMESPACE -q | \
+          grep -E '^(dpn-federator-client|dpn-federator-server|dpn-kafka|dpn-redis|dpn-zookeeper)' | \
+          while read -r release; do
+            echo "Helm uninstall: $release"
+            helm uninstall "$release" -n $NAMESPACE
+          done
+
+# -----------------------------------------------------
+# Job 5 — Verification
+# -----------------------------------------------------
+  verify:
+    name: Final Verification
+    runs-on: ubuntu-latest
+    needs: uninstall
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Load Config
+        run: |
+          for key in $(jq -r 'keys_unsorted | .[]' "$PARAMETERS_FILE"); do
+            value=$(jq -r ".\"$key\"" "$PARAMETERS_FILE")
+            echo "$key=$value" >> $GITHUB_ENV
+          done
+
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ inputs.roleArn }}
+          aws-region: ${{ inputs.region }}
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --name $EKS_CLUSTER \
+            --region ${{ inputs.region }}
+
+      - name: Verification Output
+        run: |
+          echo "Deployments:"
+          kubectl get deployments -n $NAMESPACE
+
+          echo "Pods:"
+          kubectl get pods -n $NAMESPACE
+
+          echo "Helm Releases:"
+          helm list -n $NAMESPACE
+
+          echo "Services:"
+          kubectl get svc -n $NAMESPACE

@@ -1,0 +1,58 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: federator-client-config
+  namespace: {{ .Release.Namespace }}
+data:
+  client.properties: |
+    kafka.bootstrapServers={{ .Values.federatorClient.config.kafkaBootstrapServers }}
+    kafka.sender.defaultKeySerializerClass=org.apache.kafka.common.serialization.BytesSerializer
+    kafka.sender.defaultValueSerializerClass=org.apache.kafka.common.serialization.BytesSerializer
+    kafka.consumerGroup=federator-client.consumer
+    kafka.pollDuration=PT10S
+    kafka.pollRecords=100
+    kafka.topic.prefix={{ .Values.federatorClient.config.topicPrefix }}
+    federator-client-target-topic={{ .Values.federatorClient.config.targetTopic }}
+
+    shared.headers=Security-Label^Content-Type
+    filter.shareAll=false
+
+    client.port={{ .Values.federatorClient.config.clientport }}
+    client.jobRunner.port={{ .Values.federatorClient.service.jobRunnerPort }}
+    client.keepAliveTime=10
+
+    client.tlsEnabled=true
+    client.mtlsEnabled=true
+
+    client.p12FilePath=/tls/keystore.p12
+    client.p12Password=
+    client.truststoreFilePath=/tls/truststore.p12
+    client.truststorePassword=
+
+    common.configuration=/config/common-configuration.properties
+    connections.configuration=/config/connection-configuration.json
+
+    management.node.base.url={{ .Values.federatorClient.config.management_node_base_url }}
+    management.node.request.timeout=60
+    management.node.cache.ttl.seconds=60
+    management.node.api.endpoints.producer=
+
+    redis.host={{ .Values.federatorClient.config.redisHost }}
+    redis.port={{ .Values.federatorClient.config.redisPort }}
+    redis.tls.enabled=false
+    redis.prefix=federator-client
+    redis.username=
+    redis.password=
+    redis.aes.key=
+
+    federator.consumer.id=
+
+    org.jobrunr.jobs.default-allow-concurrent-execution=false
+    jobs.dashboard.port={{ .Values.federatorClient.service.jobRunnerPort }}
+    jobs.dashboard.enabled=true
+
+    client.files.storage.provider={{ .Values.federatorClient.storage.provider }}
+    client.files.temp.dir={{ .Values.federatorClient.storage.tempDir }}
+    files.azure.container={{ .Values.federatorClient.storage.azure.container }}
+    azure.storage.endpoint={{ .Values.federatorClient.storage.azure.endpoint }}
+    azure.storage.connection.string={{ .Values.federatorClient.storage.azure.connectionString }}

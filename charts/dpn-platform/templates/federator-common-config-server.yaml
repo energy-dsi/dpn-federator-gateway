@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: federator-common-config-server
+  namespace: {{ .Release.Namespace }}
+data:
+  common-configuration.properties: |
+    idp.mtls.enabled=true
+    idp.client.id={{ .Values.federatorServer.idp.clientId }}
+
+    idp.jwks.url={{ .Values.federatorServer.idp.jwksUrl }}
+    idp.token.url={{ .Values.federatorServer.idp.tokenUrl }}
+    idp.token.backoff={{ .Values.federatorServer.idp.tokenBackoff }}
+
+    idp.truststore.path={{ .Values.federatorServer.idp.truststorePath }}
+    idp.truststore.password=
+
+    idp.keystore.path={{ .Values.federatorServer.idp.keystorePath }}
+    idp.keystore.password=
+
+    vault.uri={{ .Values.vaultConfig.uri }}
+    vault.truststore.path={{ .Values.vaultConfig.truststorePath }}
+    vault.truststore.password={{ .Values.vaultConfig.truststorePassword }}
+
+    idp.auth.mode={{ .Values.federatorServer.idp.authMode }}
+    idp.jwt.algorithm={{ .Values.federatorServer.idp.jwtAlgorithm }}
+    idp.jwt.key.alias={{ .Values.federatorServer.idp.jwtKeyAlias }}

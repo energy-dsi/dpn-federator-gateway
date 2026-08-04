@@ -1,0 +1,9 @@
+{{- if .Values.kafkaTopicPopulator.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.kafkaTestData.name }}
+  namespace: {{ .Release.Namespace }}
+data:
+  KNOWLEDGE_DATA: "{{ join " " .Values.kafkaTestData.knowledgeFiles }}"
+{{- end }}

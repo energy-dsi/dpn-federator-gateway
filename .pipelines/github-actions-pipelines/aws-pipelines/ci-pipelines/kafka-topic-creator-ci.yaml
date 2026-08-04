@@ -1,0 +1,140 @@
+name: DPN Kafka Topic Creator CI
+ 
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        type: choice
+        options: [dev, devtest, sit, preprod, prod]
+        required: true
+ 
+      cluster:
+        type: choice
+        options: [dpn01, dpn02]
+        required: true
+ 
+      imageTag:
+        description: Image tag/version
+        required: true
+        default: "v2"
+ 
+permissions:
+  id-token: write
+  contents: read
+ 
+env:
+  ENVIRONMENT: ${{ inputs.environment }}
+  CLUSTER: ${{ inputs.cluster }}
+ 
+  PROJECT_NAME: kafka-topic-creator
+  IMAGE_TAG: ${{ inputs.imageTag }}
+ 
+  DOCKERFILE_PATH: docker/kafka-topic-creator/Dockerfile
+  BUILD_CONTEXT: docker/kafka-topic-creator
+ 
+  PARAMETERS_FILE: .pipelines/github-actions-pipelines/aws-pipelines/config/${{ inputs.environment }}-${{ inputs.cluster }}.json
+ 
+jobs:
+# ==================================================
+# BUILD & PUSH KAFKA TOPIC CREATOR
+# ==================================================
+  BuildTopicCreator:
+    name: Build & Push Topic Creator
+    runs-on: ubuntu-latest
+ 
+    steps:
+      # --------------------------------
+      # CHECKOUT
+      # --------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+ 
+      # --------------------------------
+      # LOAD ENVIRONMENT CONFIG
+      # --------------------------------
+      - name: Load Environment Variables
+        shell: bash
+        run: |
+          set -euo pipefail
+ 
+          echo "Loading config: $PARAMETERS_FILE"
+ 
+          if [[ ! -f "$PARAMETERS_FILE" ]]; then
+            echo "ERROR: Config file not found"
+            exit 1
+          fi
+ 
+          jq -r 'keys[]' "$PARAMETERS_FILE" | while read key; do
+            value=$(jq -r ".\"$key\"" "$PARAMETERS_FILE")
+            echo "$key=$value" >> $GITHUB_ENV
+          done
+ 
+      # --------------------------------
+      # (OPTIONAL) AWS AUTHENTICATION
+      # --------------------------------
+      - name: AWS Authentication (OIDC)
+        if: secrets.AWS_ROLE_TO_ASSUME != ''
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+ 
+      # --------------------------------
+      # REGISTRY LOGIN (FULLY PARAMETERISED)
+      # --------------------------------
+      - name: Login to Container Registry
+        shell: bash
+        run: |
+          set -euo pipefail
+ 
+          echo "Logging into registry: ${{ secrets.REGISTRY_URL }}"
+ 
+          echo "${{ secrets.REGISTRY_PASSWORD }}" | \
+            docker login "${{ secrets.REGISTRY_URL }}" \
+              --username "${{ secrets.REGISTRY_USERNAME }}" \
+              --password-stdin
+ 
+      # --------------------------------
+      # BUILD IMAGE
+      # --------------------------------
+      - name: Build Topic Creator Image
+        shell: bash
+        run: |
+          set -euo pipefail
+ 
+          IMAGE_WITH_TAG="${{ secrets.REGISTRY_URL }}/${PROJECT_NAME}:${IMAGE_TAG}"
+          IMAGE_LATEST="${{ secrets.REGISTRY_URL }}/${PROJECT_NAME}:latest"
+ 
+          echo "Building images:"
+          echo " - $IMAGE_WITH_TAG"
+          echo " - $IMAGE_LATEST"
+ 
+          docker build \
+            --build-arg BASE_REGISTRY="${BASE_REGISTRY}" \
+            -f "$DOCKERFILE_PATH" \
+            -t "$IMAGE_WITH_TAG" \
+            -t "$IMAGE_LATEST" \
+            "$BUILD_CONTEXT"
+ 
+      # --------------------------------
+      # PUSH IMAGE
+      # --------------------------------
+      - name: Push Topic Creator Image
+        shell: bash
+        run: |
+          set -euo pipefail
+ 
+          docker push "${{ secrets.REGISTRY_URL }}/${PROJECT_NAME}:${IMAGE_TAG}"
+          docker push "${{ secrets.REGISTRY_URL }}/${PROJECT_NAME}:latest"
+ 
+      # --------------------------------
+      # CLEANUP
+      # --------------------------------
+      - name: Cleanup Docker
+        if: always()
+        shell: bash
+        run: |
+          docker rmi "${{ secrets.REGISTRY_URL }}/${PROJECT_NAME}:${IMAGE_TAG}" || true
+          docker rmi "${{ secrets.REGISTRY_URL }}/${PROJECT_NAME}:latest" || true
+ 
+          echo "Cleanup completed."

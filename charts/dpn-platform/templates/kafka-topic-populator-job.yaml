@@ -1,0 +1,44 @@
+{{- if .Values.kafkaTopicPopulator.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Values.kafkaTopicPopulator.name }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "2"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ .Values.kafkaTopicPopulator.backoffLimit }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.kafkaTopicPopulator.name }}
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: {{ .Values.kafkaTopicPopulator.name }}
+          image: "{{ .Values.kafkaTopicPopulator.image.repository }}:{{ .Values.kafkaTopicPopulator.image.tag }}"
+          imagePullPolicy: {{ .Values.kafkaTopicPopulator.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+          env:
+            - name: KAFKA_BROKER_SERVER
+              value: "{{ .Values.kafkaTopicPopulator.env.KAFKA_BROKER_SERVER }}"
+            - name: KNOWLEDGE_TOPIC
+              value: "{{ .Values.kafkaTopicPopulator.env.KNOWLEDGE_TOPIC }}"
+            - name: KNOWLEDGE_DATA
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.kafkaTopicPopulator.configMapRefs.knowledgeDataConfigMap }}
+                  key: {{ .Values.kafkaTopicPopulator.configMapRefs.knowledgeDataKey }}
+            - name: DATA_DELIMITER
+              value: "{{ .Values.kafkaTopicPopulator.env.DATA_DELIMITER }}"
+          volumeMounts:
+            - name: {{ .Values.kafkaTopicPopulator.volumeConfig.name }}
+              mountPath: {{ .Values.kafkaTopicPopulator.volumeConfig.mountPath }}
+      volumes:
+        - name: {{ .Values.kafkaTopicPopulator.volumeConfig.name }}
+          configMap:
+            name: {{ .Values.kafkaTopicPopulator.volumeConfig.configMapName }}
+{{- end }}

@@ -1,0 +1,30 @@
+{{- if .Values.kafkaTopicCreator.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Values.kafkaTopicCreator.name }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "1"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+  labels:
+    app: {{ .Values.kafkaTopicCreator.name }}
+spec:
+  backoffLimit: {{ .Values.kafkaTopicCreator.backoffLimit }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.kafkaTopicCreator.name }}
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: {{ .Values.kafkaTopicCreator.name }}
+          image: "{{ .Values.kafkaTopicCreator.image.repository }}:{{ .Values.kafkaTopicCreator.image.tag }}"
+          imagePullPolicy: {{ .Values.kafkaTopicCreator.image.pullPolicy }}
+          env:
+            {{- range $key, $value := .Values.kafkaTopicCreator.env }}
+            - name: {{ $key }}
+              value: "{{ $value }}"
+            {{- end }}
+{{- end }}

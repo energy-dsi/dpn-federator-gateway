@@ -1,0 +1,184 @@
+name: Federator CI Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+
+      serviceConnection:
+        description: "Service Connection"
+        required: true
+        default: sc-dpn-dev-001
+        type: choice
+        options:
+          - sc-dpn-dev-001
+          - sc-dpn-dev-002
+          - sc-dpn-sit-001
+          - sc-dpn-preprod-001
+          - sc-dpn-prod-001
+      
+      environment:
+        description: Environment Name
+        required: true
+        default: dev
+        type: choice
+        options: [dev, devtest, sit, preprod, prod]
+      
+      cluster:
+        required: true
+        default: dpn01
+        type: choice
+        options: [dpn01, dpn02]
+      
+      enablePIT:
+        required: false
+        default: false
+        type: boolean
+
+
+jobs:
+
+# =====================================================
+# Stage 1 — Unit Tests
+# =====================================================
+  UnitTests:
+    runs-on: ubuntu-latest
+    needs: Checkmarx_Scan
+
+    env:
+      GITHUB_MAVEN_USERNAME: ${{ secrets.GITHUB_MAVEN_USERNAME }}
+      GITHUB_MAVEN_TOKEN: ${{ secrets.GITHUB_MAVEN_TOKEN }}
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_PASSWORD: ${{ secrets.DOCKERHUB_PASSWORD }}
+
+      CLIENT_IMAGE: dpn-federator-client
+      SERVER_IMAGE: dpn-federator-server
+      IMAGE_TAG: ${{ github.run_id }}
+      PARAMETERS_FILE: .pipelines/github-actions-pipelines/gcp-pipelines/config/${{ inputs.environment }}-${{ inputs.cluster }}.json
+      CLOC_EXCLUDES: "target,.git,node_modules"
+      REGION: Test-Region #  Set your required region here
+
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Load Environment Config
+        run: |
+          echo "Loading config: $PARAMETERS_FILE"
+          for param in $(jq -r 'keys_unsorted | .[]' "$PARAMETERS_FILE"); do
+            value=$(jq -r ".\"$param\"" "$PARAMETERS_FILE")
+            echo "$param=$value" >> $GITHUB_ENV
+          done
+
+      # JavaToolInstaller
+      - name: Set Java 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      # Maven settings
+      - name: Configure Maven settings
+        run: |
+          mkdir -p ~/.m2
+          cat <<EOF > ~/.m2/settings.xml
+          <settings>
+            <servers>
+              <server>
+                <id>github</id>
+                <username>${GITHUB_MAVEN_USERNAME}</username>
+                <password>${GITHUB_MAVEN_TOKEN}</password>
+              </server>
+            </servers>
+          </settings>
+          EOF
+
+      # DockerHub login
+      - name: DockerHub login
+        run: |
+          echo "$DOCKERHUB_PASSWORD" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
+
+      # Maven build
+      - name: Run mvn clean verify
+        run: mvn clean verify
+
+      # PIT mutation
+      - name: Run PIT Mutation Tests
+        if: ${{ inputs.enablePIT == true }}
+        run: |
+          export MAVEN_OPTS="--add-opens=java.base/java.lang=ALL-UNNAMED \
+          --add-opens=java.base/java.util=ALL-UNNAMED \
+          --add-opens=java.base/java.io=ALL-UNNAMED \
+          --add-opens=java.base/java.nio=ALL-UNNAMED \
+          --add-opens=java.base/java.lang.reflect=ALL-UNNAMED -Xmx2048m"
+          mvn org.pitest:pitest-maven:mutationCoverage      
+
+      # PIT artifact
+      - name: Publish PIT Report
+        if: ${{ inputs.enablePIT == true }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pit-report
+          path: target/pit-reports/
+      
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+# =====================================================
+# Stage 2 — Build
+# =====================================================
+  Build:
+    runs-on: ubuntu-latest
+    needs: UnitTests
+
+    env:
+      IMAGE_TAG: ${{ github.run_id }}
+      CLIENT_IMAGE: dpn-federator-client
+      SERVER_IMAGE: dpn-federator-server
+      PARAMETERS_FILE: .pipelines/github-actions-pipelines/gcp-pipelines/config/${{ inputs.environment }}-${{ inputs.cluster }}.json
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Load Config
+        run: |
+          for param in $(jq -r 'keys_unsorted | .[]' "$PARAMETERS_FILE"); do
+            value=$(jq -r ".\"$param\"" "$PARAMETERS_FILE")
+            echo "$param=$value" >> $GITHUB_ENV
+          done
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Configure Docker
+        run: gcloud auth configure-docker ${REGION}-docker.pkg.dev
+
+      # Build images
+      - name: Build Client Image
+        run: |
+          docker build \
+          -f Dockerfile.client \
+          -t ${REGION}-docker.pkg.dev/$(CONTAINER_REGISTRY_URL)/${CLIENT_IMAGE}:${IMAGE_TAG} .
+
+      - name: Build Server Image
+        run: |
+          docker build \
+          -f Dockerfile.server \
+          -t ${REGION}-docker.pkg.dev/$(CONTAINER_REGISTRY_URL)/${SERVER_IMAGE}:${IMAGE_TAG} .
+
+      # Push
+      - name: Push Images
+        run: |
+          docker push ${REGION}-docker.pkg.dev/$(CONTAINER_REGISTRY_URL)/${CLIENT_IMAGE}:${IMAGE_TAG}
+          docker push ${REGION}-docker.pkg.dev/$(CONTAINER_REGISTRY_URL)/${SERVER_IMAGE}:${IMAGE_TAG}
+
+      # Cleanup
+      - name: Cleanup Docker
+        if: always()
+        run: |
+          docker rmi ${REGION}-docker.pkg.dev/$(CONTAINER_REGISTRY_URL)/${CLIENT_IMAGE}:${IMAGE_TAG} || true
+          docker rmi ${REGION}-docker.pkg.dev/$(CONTAINER_REGISTRY_URL)/${SERVER_IMAGE}:${IMAGE_TAG} || true

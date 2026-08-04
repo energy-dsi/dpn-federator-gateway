@@ -1,0 +1,79 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.kafkaUI.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ .Values.kafkaUI.name }}
+spec:
+  replicas: {{ .Values.kafkaUI.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ .Values.kafkaUI.name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.kafkaUI.name }}
+    spec:
+      containers:
+        - name: {{ .Values.kafkaUI.name }}
+          image: "{{ .Values.kafkaUI.image.repository }}:{{ .Values.kafkaUI.image.tag }}"
+          imagePullPolicy: {{ .Values.kafkaUI.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+          ports:
+            - containerPort: {{ .Values.kafkaUI.service.port }}
+          env:
+            {{- range $key, $value := .Values.kafkaUI.env }}
+            - name: {{ $key }}
+              value: "{{ $value }}"
+            {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /
+              port: {{ .Values.kafkaUI.service.port }}
+            initialDelaySeconds: {{ .Values.kafkaUI.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.kafkaUI.readinessProbe.periodSeconds }}
+          livenessProbe:
+            httpGet:
+              path: /
+              port: {{ .Values.kafkaUI.service.port }}
+            initialDelaySeconds: {{ .Values.kafkaUI.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.kafkaUI.livenessProbe.periodSeconds }}
+          {{- with .Values.kafkaUI.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.kafkaUI.name }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    app: {{ .Values.kafkaUI.name }}
+  ports:
+    - name: http
+      port: {{ .Values.kafkaUI.service.port }}
+      targetPort: {{ .Values.kafkaUI.service.port }}
+# ---
+
+# apiVersion: v1
+# kind: Service
+# metadata:
+#   name: {{ .Values.kafkaUI.name }}-lb
+#   namespace: {{ .Release.Namespace }}
+
+#   annotations:
+#     service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+
+# spec:
+#   type: LoadBalancer
+#   selector:
+#     app: {{ .Values.kafkaUI.name }}
+#   ports:
+#     - name: http
+#       port: {{ .Values.kafkaUI.service.port }}
+#       targetPort: {{ .Values.kafkaUI.service.port }}
+

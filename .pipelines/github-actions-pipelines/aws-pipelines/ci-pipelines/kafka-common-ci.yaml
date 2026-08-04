@@ -1,0 +1,137 @@
+name: DPN Kafka CI
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        type: choice
+        options: [dev, devtest, sit, preprod, prod]
+        required: true
+
+      cluster:
+        type: choice
+        options: [dpn01, dpn02]
+        required: true
+
+      imageTag:
+        description: Kafka image tag/version
+        required: true
+        default: "7.5.3"
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  ENVIRONMENT: ${{ inputs.environment }}
+  CLUSTER: ${{ inputs.cluster }}
+
+  PROJECT_NAME: dpn-kafka
+  IMAGE_TAG: ${{ inputs.imageTag }}
+
+  DOCKERFILE_PATH: .pipelines/github-actions-pipelines/aws-pipelines/kafka/Dockerfile
+  BUILD_CONTEXT: .pipelines/github-actions-pipelines/aws-pipelines/kafka
+
+  PARAMETERS_FILE: .pipelines/github-actions-pipelines/aws-pipelines/config/${{ inputs.environment }}-${{ inputs.cluster }}.json
+
+jobs:
+# ==================================================
+# BUILD & PUSH KAFKA IMAGE
+# ==================================================
+  BuildKafka:
+    runs-on: ubuntu-latest
+    name: Build & Push Kafka
+
+    steps:
+      # --------------------------------
+      # CHECKOUT
+      # --------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # --------------------------------
+      # LOAD ENVIRONMENT CONFIG
+      # --------------------------------
+      - name: Load Environment Variables
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Loading config: $PARAMETERS_FILE"
+
+          if [[ ! -f "$PARAMETERS_FILE" ]]; then
+            echo "ERROR: Config file not found"
+            exit 1
+          fi
+
+          jq -r 'keys[]' "$PARAMETERS_FILE" | while read key; do
+            value=$(jq -r ".\"$key\"" "$PARAMETERS_FILE")
+            echo "$key=$value" >> $GITHUB_ENV
+          done
+
+      # --------------------------------
+      # (OPTIONAL) AWS AUTH – OIDC
+      # --------------------------------
+      - name: AWS Authentication
+        if: secrets.AWS_ROLE_TO_ASSUME != ''
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # --------------------------------
+      # REGISTRY LOGIN (PARAMETERISED)
+      # --------------------------------
+      - name: Login to Container Registry
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Logging into registry: ${{ secrets.REGISTRY_URL }}"
+
+          echo "${{ secrets.REGISTRY_PASSWORD }}" | \
+            docker login "${{ secrets.REGISTRY_URL }}" \
+              --username "${{ secrets.REGISTRY_USERNAME }}" \
+              --password-stdin
+
+      # --------------------------------
+      # BUILD IMAGE
+      # --------------------------------
+      - name: Build Kafka Image
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          IMAGE="${{ secrets.REGISTRY_URL }}/${PROJECT_NAME}:${IMAGE_TAG}"
+
+          echo "Building Kafka image: $IMAGE"
+
+          docker build \
+            --build-arg BASE_REGISTRY="${BASE_REGISTRY}" \
+            -f "$DOCKERFILE_PATH" \
+            -t "$IMAGE" \
+            "$BUILD_CONTEXT"
+
+      # --------------------------------
+      # PUSH IMAGE
+      # --------------------------------
+      - name: Push Kafka Image
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          IMAGE="${{ secrets.REGISTRY_URL }}/${PROJECT_NAME}:${IMAGE_TAG}"
+
+          echo "Pushing Kafka image: $IMAGE"
+
+          docker push "$IMAGE"
+
+      # --------------------------------
+      # CLEANUP
+      # --------------------------------
+      - name: Cleanup Docker
+        if: always()
+        shell: bash
+        run: |
+          IMAGE="${{ secrets.REGISTRY_URL }}/${PROJECT_NAME}:${IMAGE_TAG}"
+          docker rmi "$IMAGE" || true

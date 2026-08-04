@@ -1,0 +1,149 @@
+# =========================================
+# DPN Kafka CI - Enterprise (GCP Version)
+# =========================================
+
+name: DPN-Kafka-CI
+
+on:
+  workflow_dispatch:
+    inputs:
+
+      # ----------------------------------
+      # Parameters.environment
+      # ----------------------------------
+      environment:
+        description: Environment
+        required: true
+        default: dev
+        type: choice
+        options:
+          - dev
+          - devtest
+          - sit
+          - preprod
+          - prod
+
+      # ----------------------------------
+      # Parameters.cluster
+      # ----------------------------------
+      cluster:
+        description: Cluster
+        required: true
+        default: dpn01
+        type: choice
+        options:
+          - dpn01
+          - dpn02
+
+      # ----------------------------------
+      # Parameters.ServiceConnection
+      # ----------------------------------
+      ServiceConnection:
+        description: Service Connection
+        required: true
+        default: sc-dpn-dev-001
+        type: choice
+        options:
+          - sc-dpn-dev-001
+          - sc-dpn-dev-002
+          - sc-dpn-sit-001
+          - sc-dpn-preprod-001
+          - sc-dpn-prod-001
+
+jobs:
+
+  Build:
+    name: Build & Push Kafka
+    runs-on: ubuntu-latest
+
+    # ==================================================
+    # Variables
+    # ==================================================
+    env:
+      PROJECT_NAME: dpn-kafka
+      IMAGE_TAG: 7.5.3    #  Set your required Kafka version here
+      REGION: Test-Region #  Set your required region here
+
+      DOCKERFILE_PATH: .pipelines/github-actions-pipelines/gcp-pipelines/kafka/Dockerfile
+      BUILD_CONTEXT: .pipelines/github-actions-pipelines/gcp-pipelines/kafka
+      PARAMETERS_FILE: .pipelines/github-actions-pipelines/gcp-pipelines/config/${{ inputs.environment }}-${{ inputs.cluster }}.json
+
+    steps:
+
+      # --------------------------------
+      # Checkout
+      # --------------------------------
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+
+      # --------------------------------
+      # Load Environment Config
+      # --------------------------------
+      - name: Load Environment Variables
+        run: |
+          echo "Loading config: $PARAMETERS_FILE"
+
+          for param in $(jq -r 'keys_unsorted | .[]' "$PARAMETERS_FILE"); do
+            value=$(jq -r ".\"$param\"" "$PARAMETERS_FILE")
+            echo "$param=$value" >> $GITHUB_ENV
+          done
+
+
+      # --------------------------------
+      # GCP Authentication
+      # --------------------------------
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      # --------------------------------
+      # Artifact Registry Login
+      # --------------------------------
+      - name: Configure Docker for Artifact Registry
+        run: |
+          echo "Authenticating Docker with Artifact Registry"
+          gcloud auth configure-docker ${REGION}-docker.pkg.dev
+
+      - name: Display Target Registry
+        run: |
+          echo "Target Registry: $CONTAINER_REGISTRY"
+          echo "Registry URL: $CONTAINER_REGISTRY_URL"
+
+
+      # --------------------------------
+      # Build Image
+      # --------------------------------
+      - name: Build Kafka Image
+        run: |
+          echo "Building Kafka image..."
+
+          docker build \
+            --build-arg BASE_REGISTRY=$BASE_REGISTRY \
+            -f $DOCKERFILE_PATH \
+            -t ${REGION}-docker.pkg.dev/$(CONTAINER_REGISTRY_URL)/${PROJECT_NAME}:${IMAGE_TAG} \
+            $BUILD_CONTEXT
+
+
+      # --------------------------------
+      # Push Image
+      # --------------------------------
+      - name: Push Kafka Image
+        run: |
+          echo "Pushing Kafka image..."
+          docker push ${REGION}-docker.pkg.dev/$(CONTAINER_REGISTRY_URL)/${PROJECT_NAME}:${IMAGE_TAG}
+
+
+      # --------------------------------
+      # Cleanup (condition: always())
+      # --------------------------------
+      - name: Cleanup Docker
+        if: always()
+        run: |
+          echo "Cleaning up Docker images..."
+
+          docker rmi ${REGION}-docker.pkg.dev/$(CONTAINER_REGISTRY_URL)/${PROJECT_NAME}:${IMAGE_TAG} || true
+
+          echo "Cleanup completed."

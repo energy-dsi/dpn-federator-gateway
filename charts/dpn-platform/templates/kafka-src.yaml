@@ -1,0 +1,142 @@
+{{- if .Values.kafkaSrc.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Values.kafkaSrc.name }}-pvc
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ .Values.kafkaSrc.name }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: {{ .Values.kafkaSrc.persistence.storageClass }}
+  resources:
+    requests:
+      storage: {{ .Values.kafkaSrc.persistence.size }}
+---
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.kafkaSrc.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ .Values.kafkaSrc.name }}
+spec:
+  replicas: {{ .Values.kafkaSrc.replicaCount }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: {{ .Values.kafkaSrc.name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.kafkaSrc.name }}
+    spec:
+      securityContext:
+        runAsUser: {{ .Values.kafkaSrc.securityContext.runAsUser }}
+        runAsGroup: {{ .Values.kafkaSrc.securityContext.runAsGroup }}
+        fsGroup: {{ .Values.kafkaSrc.securityContext.fsGroup }}
+      containers:
+        - name: kafka
+          image: "{{ .Values.kafkaSrc.image.repository }}:{{ .Values.kafkaSrc.image.tag }}"
+          imagePullPolicy: {{ .Values.kafkaSrc.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+          ports:
+            - containerPort: {{ .Values.kafkaSrc.service.port }}
+          env:
+            - name: KAFKA_BROKER_ID
+              value: "{{ .Values.kafkaSrc.env.KAFKA_BROKER_ID }}"
+
+            - name: KAFKA_ZOOKEEPER_CONNECT
+              value: "{{ .Values.kafkaSrc.env.KAFKA_ZOOKEEPER_CONNECT }}"
+
+            - name: KAFKA_LISTENERS
+              value: "{{ .Values.kafkaSrc.env.KAFKA_LISTENERS }}"
+
+            - name: KAFKA_ADVERTISED_LISTENERS
+              value: "INTERNAL://{{ .Values.kafkaSrc.name }}:9092,INTERNAL_FQDN://{{ .Values.kafkaSrc.name }}.{{ .Release.Namespace }}.svc.cluster.local:9093"
+
+            - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
+              value: "{{ .Values.kafkaSrc.env.KAFKA_LISTENER_SECURITY_PROTOCOL_MAP }}"
+
+            - name: KAFKA_INTER_BROKER_LISTENER_NAME
+              value: "{{ .Values.kafkaSrc.env.KAFKA_INTER_BROKER_LISTENER_NAME }}"
+
+            - name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR
+              value: "{{ .Values.kafkaSrc.env.KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR }}"
+
+            - name: KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR
+              value: "{{ .Values.kafkaSrc.env.KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR }}"
+
+            - name: KAFKA_TRANSACTION_STATE_LOG_MIN_ISR
+              value: "{{ .Values.kafkaSrc.env.KAFKA_TRANSACTION_STATE_LOG_MIN_ISR }}"
+
+            - name: KAFKA_MESSAGE_MAX_BYTES
+              value: "{{ .Values.kafkaSrc.env.KAFKA_MESSAGE_MAX_BYTES }}"
+
+            - name: KAFKA_REPLICA_FETCH_MAX_BYTES
+              value: "{{ .Values.kafkaSrc.env.KAFKA_REPLICA_FETCH_MAX_BYTES }}"
+
+            - name: KAFKA_LOG_RETENTION_MS
+              value: "{{ .Values.kafkaSrc.env.KAFKA_LOG_RETENTION_MS }}"
+
+            - name: KAFKA_LOG_RETENTION_BYTES
+              value: "{{ .Values.kafkaSrc.env.KAFKA_LOG_RETENTION_BYTES }}"
+            - name: KAFKA_LOG_DIRS
+              value: "{{ .Values.kafkaSrc.env.KAFKA_LOG_DIRS }}"              
+
+          volumeMounts:
+            - name: kafka-data
+              mountPath: /var/lib/kafka/data
+
+          readinessProbe:
+            tcpSocket:
+              port: {{ .Values.kafkaSrc.service.port }}
+            initialDelaySeconds: {{ .Values.kafkaSrc.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.kafkaSrc.readinessProbe.periodSeconds }}
+          livenessProbe:
+            tcpSocket:
+              port: {{ .Values.kafkaSrc.service.port }}
+            initialDelaySeconds: {{ .Values.kafkaSrc.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.kafkaSrc.livenessProbe.periodSeconds }}
+      volumes:
+        - name: kafka-data
+{{- if .Values.kafkaSrc.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.kafkaSrc.name }}-pvc
+{{- else }}
+          emptyDir: {}
+{{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.kafkaSrc.name }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    app: {{ .Values.kafkaSrc.name }}
+  ports:
+    - name: kafka
+      port: {{ .Values.kafkaSrc.service.port }}
+      targetPort: {{ .Values.kafkaSrc.service.port }}
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.kafkaSrc.name }}-lb
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+spec:
+  type: LoadBalancer
+  selector:
+    app: {{ .Values.kafkaSrc.name }}
+  ports:
+    - name: kafka
+      port: {{ .Values.kafkaSrc.service.port }}
+      targetPort: {{ .Values.kafkaSrc.service.port }}

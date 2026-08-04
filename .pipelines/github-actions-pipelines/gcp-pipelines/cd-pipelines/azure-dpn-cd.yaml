@@ -1,0 +1,218 @@
+name: Deploy DPN to GKE
+
+on:
+  workflow_dispatch:
+    inputs:
+
+      # ============================================
+      # parameters.ServiceConnection
+      # ============================================
+      ServiceConnection:
+        description: 'ServiceConnection details'
+        required: true
+        default: 'sc-dpn-dev-001'
+        type: choice
+        options:
+          - sc-dpn-dev-001
+          - sc-dpn-dev-002
+          - sc-dpn-sit-001
+          - sc-dpn-sit-002
+
+      # ============================================
+      # parameters.environment
+      # ============================================
+      environment:
+        description: 'Environment Name'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - devtest
+          - sit
+          - preprod
+          - prod
+
+      # ============================================
+      # parameters.dpncluster
+      # ============================================
+      dpncluster:
+        description: 'Target DPN Cluster'
+        required: true
+        type: choice
+        options:
+          - dpn01
+          - dpn02
+
+      # ============================================
+      # parameters.imageTag
+      # ============================================
+      imageTag:
+        description: 'Federator Image tag'
+        required: true
+        type: string
+
+# ============================================
+# Env Variables
+# ============================================
+env:
+  HELM_DIR: charts/dpn-platform
+  RELEASE_NAME: dpn-platform  
+  VALUES_FILE: values-${{ inputs.environment }}-${{ inputs.dpncluster }}.yaml
+  PARAMETERS_FILE: .pipelines/github-actions-pipelines/gcp-pipelines/config/${{ inputs.environment }}-${{ inputs.dpncluster }}.json
+  REGION: Test-Region #  Set your required region here
+  HELM_REPO_URL: https://raw.githubusercontent.com/helm/helm
+  HELM_BRANCH: main
+  HELM_SCRIPT: scripts/get-helm-3
+  SDK_URL: https://sdk.cloud.google.com
+
+jobs:
+  
+  Deploy:
+    name: Helm Deploy - DPN
+    runs-on: ubuntu-latest
+    steps:
+
+    # ============================================
+    # Checkout
+    # ============================================
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    # ============================================
+    # Load Environment Config
+    # ============================================
+    - name: Load Environment Config
+      run: |
+        echo "Loading config: $PARAMETERS_FILE"
+        for param in $(jq -r 'keys_unsorted | .[]' "$GITHUB_WORKSPACE/$PARAMETERS_FILE"); do
+          value=$(jq -r ".\"$param\"" "$GITHUB_WORKSPACE/$PARAMETERS_FILE")
+          echo "$param=$value" >> $GITHUB_ENV
+        done
+
+    # ============================================
+    # GCP authentication
+    # ============================================
+    - name: Authenticate to GCP
+      uses: google-github-actions/auth@v2
+      with:
+        credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+
+    # ============================================
+    # GCP Auth + Helm Deploy
+    # ============================================
+    - name: GCP Auth + Helm Deploy
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        echo "================================================="
+        echo " INSTALL TOOLS"
+        echo "================================================="
+
+        curl "$SDK_URL" | bash >/dev/null
+        source $HOME/google-cloud-sdk/path.bash.inc
+
+        gcloud components install kubectl -q
+        curl -fsSL "$HELM_REPO_URL/$HELM_BRANCH/$HELM_SCRIPT" | bash
+
+        kubectl version --client >/dev/null
+        helm version >/dev/null
+
+        echo "Tools installed"
+
+        echo "=========================================="
+        echo " GCP AUTH"
+        echo "=========================================="
+
+        gcloud config set project $GCP_PROJECT_ID
+
+        gcloud auth list >/dev/null
+        echo "GCP auth OK"
+
+        echo "=========================================="
+        echo " GKE CONTEXT"
+        echo "=========================================="
+        
+        gcloud container clusters get-credentials $GKE_CLUSTER \
+          --region $REGION
+
+        echo "GKE context ready"
+
+        echo "=========================================="
+        echo " FETCH IDP SECRETS FROM SECRET MANAGER"
+        echo "=========================================="
+        
+        IDP_CLIENT_SECRET=$(gcloud secrets versions access latest \
+          --secret=IDP-CLIENT-SECRET)
+
+        IDP_TRUSTSTORE_PASSWORD=$(gcloud secrets versions access latest \
+          --secret=IDP-TRUSTSTORE-PASSWORD)
+
+        IDP_KEYSTORE_PASSWORD=$(gcloud secrets versions access latest \
+          --secret=IDP-KEYSTORE-PASSWORD)
+
+        echo "IDP secrets fetched"
+
+        echo "=========================================="
+        echo " HELM VALIDATION"
+        echo "=========================================="
+
+        helm lint "$HELM_DIR"
+
+        helm upgrade --install $RELEASE_NAME "$HELM_DIR" \
+          -n $NAMESPACE \
+          --set federatorServer.image.tag="${{ inputs.imageTag }}" \
+          --set federatorClient.image.tag="${{ inputs.imageTag }}" \
+          --set federatorServer.idp.clientSecret="$IDP_CLIENT_SECRET" \
+          --set federatorServer.idp.truststorePassword="$IDP_TRUSTSTORE_PASSWORD" \
+          --set federatorServer.idp.keystorePassword="$IDP_KEYSTORE_PASSWORD" \
+          --set federatorClient.idp.clientSecret="$IDP_CLIENT_SECRET" \
+          --set federatorClient.idp.truststorePassword="$IDP_TRUSTSTORE_PASSWORD" \
+          --set federatorClient.idp.keystorePassword="$IDP_KEYSTORE_PASSWORD" \
+          -f "$HELM_DIR/$VALUES_FILE" \
+          --dry-run --debug >/dev/null
+
+        echo "Helm dry-run successful"
+
+        echo "=========================================="
+        echo " HELM DEPLOY"
+        echo "=========================================="
+
+        helm upgrade --install $RELEASE_NAME "$HELM_DIR" \
+          -n $NAMESPACE \
+          --set federatorServer.image.tag="${{ inputs.imageTag }}" \
+          --set federatorClient.image.tag="${{ inputs.imageTag }}" \
+          --set federatorServer.idp.clientSecret="$IDP_CLIENT_SECRET" \
+          --set federatorServer.idp.truststorePassword="$IDP_TRUSTSTORE_PASSWORD" \
+          --set federatorServer.idp.keystorePassword="$IDP_KEYSTORE_PASSWORD" \
+          --set federatorClient.idp.clientSecret="$IDP_CLIENT_SECRET" \
+          --set federatorClient.idp.truststorePassword="$IDP_TRUSTSTORE_PASSWORD" \
+          --set federatorClient.idp.keystorePassword="$IDP_KEYSTORE_PASSWORD" \
+          -f "$HELM_DIR/$VALUES_FILE" \
+          --debug
+
+        echo "=========================================="
+        echo " POST-DEPLOY VERIFICATION"
+        echo "=========================================="
+
+        echo " Checking Core Deployments..."
+        kubectl rollout status deployment/dpn-redis -n $NAMESPACE --timeout=300s
+        kubectl rollout status deployment/dpn-zookeeper-src -n $NAMESPACE --timeout=300s
+        kubectl rollout status deployment/dpn-zookeeper-target -n $NAMESPACE --timeout=300s
+        kubectl rollout status deployment/dpn-kafka-src -n $NAMESPACE --timeout=300s
+        kubectl rollout status deployment/dpn-kafka-target -n $NAMESPACE --timeout=300s
+        kubectl rollout status deployment/dpn-kafka-ui -n $NAMESPACE --timeout=300s
+
+        echo " Checking Services..."
+        kubectl get svc -n $NAMESPACE
+
+        echo " Checking Pods..."
+        kubectl get pods -n $NAMESPACE
+
+        echo " Helm Status..."
+        helm status $RELEASE_NAME -n $NAMESPACE
+
+        echo "=========================================="
+        echo "DPN DEPLOYMENT COMPLETE"
+        echo "=========================================="

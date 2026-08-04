@@ -1,0 +1,393 @@
+redis:
+  name: dpn-redis
+  replicaCount: 1
+  image:
+    repository: <<CONTAINER_REGISTRY_URL>>/dpn-redis
+    tag: "7.2"
+    pullPolicy: Always
+  service:
+    port: 6379
+    type: ClusterIP
+  args:
+    - "--save"
+    - ""
+    - "--appendonly"
+    - "no"
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "256Mi"
+
+zookeeperSrc:
+  name: dpn-zookeeper-src
+  replicaCount: 1
+  image:
+    repository: <<CONTAINER_REGISTRY_URL>>/dpn-zookeeper
+    tag: "7.5.3"
+    pullPolicy: Always
+  service:
+    port: 2181
+  env:
+    ZOOKEEPER_CLIENT_PORT: "2181"
+    ZOOKEEPER_SERVER_ID: "1"
+    ZOOKEEPER_SERVERS: "dpn-zookeeper-src:2888:3888"
+  readinessProbe:
+    initialDelaySeconds: 10
+    periodSeconds: 5
+  livenessProbe:
+    initialDelaySeconds: 20
+    periodSeconds: 10
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+  # Persist ZooKeeper state so the Kafka cluster ID survives ZK restarts.
+  # enabled: false -> ephemeral (emptyDir); ZK loses cluster ID on restart.
+  persistence:
+    enabled: true
+    storageClass: managed-premium
+    size: 8Gi
+  securityContext:
+    runAsUser: 1000
+    runAsGroup: 0
+    fsGroup: 0
+
+zookeeperTarget:
+  name: dpn-zookeeper-target
+  replicaCount: 1
+  image:
+    repository: <<CONTAINER_REGISTRY_URL>>/dpn-zookeeper
+    tag: "7.5.3"
+    pullPolicy: Always
+  service:
+    port: 2181
+  env:
+    ZOOKEEPER_CLIENT_PORT: "2181"
+    ZOOKEEPER_SERVER_ID: "1"
+    ZOOKEEPER_SERVERS: "dpn-zookeeper-target:2888:3888"
+  readinessProbe:
+    initialDelaySeconds: 10
+    periodSeconds: 5
+  livenessProbe:
+    initialDelaySeconds: 20
+    periodSeconds: 10
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+  # Persist ZooKeeper state so the Kafka cluster ID survives ZK restarts.
+  # enabled: false -> ephemeral (emptyDir); ZK loses cluster ID on restart.
+  persistence:
+    enabled: true
+    storageClass: managed-premium
+    size: 8Gi
+  securityContext:
+    runAsUser: 1000
+    runAsGroup: 0
+    fsGroup: 0
+
+kafkaSrc:
+  name: dpn-kafka-src
+  replicaCount: 1
+  image:
+    repository: <<CONTAINER_REGISTRY_URL>>/dpn-kafka
+    tag: "7.5.3"
+    pullPolicy: Always
+  service:
+    port: 9092
+  env:
+    KAFKA_BROKER_ID: "1"
+    KAFKA_ZOOKEEPER_CONNECT: "dpn-zookeeper-src:2181"
+    KAFKA_LISTENERS: "INTERNAL://0.0.0.0:9092,INTERNAL_FQDN://0.0.0.0:9093"
+    KAFKA_ADVERTISED_LISTENERS: "INTERNAL://dpn-kafka-src:9092,INTERNAL_FQDN://dpn-kafka-src.ns-dpn-01.svc.cluster.local:9093"
+    KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "INTERNAL:PLAINTEXT,INTERNAL_FQDN:PLAINTEXT"
+    KAFKA_INTER_BROKER_LISTENER_NAME: "INTERNAL"
+    KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+    KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+    KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+    KAFKA_MESSAGE_MAX_BYTES: "10485760"
+    KAFKA_REPLICA_FETCH_MAX_BYTES: "10485760"
+    KAFKA_LOG_RETENTION_MS: "-1"
+    KAFKA_LOG_RETENTION_BYTES: "-1"
+    KAFKA_LOG_DIRS: "/var/lib/kafka/data/data"
+  readinessProbe:
+    initialDelaySeconds: 20
+    periodSeconds: 10
+  livenessProbe:
+    initialDelaySeconds: 40
+    periodSeconds: 20
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+    limits:
+      cpu: "1000m"
+      memory: "2Gi"
+  persistence:
+    enabled: true
+    storageClass: managed-premium
+    size: 128Gi
+  securityContext:
+    runAsUser: 1001
+    runAsGroup: 0
+    fsGroup: 0
+
+kafkaTarget:
+  name: dpn-kafka-target
+  replicaCount: 1
+  image:
+    repository: <<CONTAINER_REGISTRY_URL>>/dpn-kafka
+    tag: "7.5.3"
+    pullPolicy: Always
+  service:
+    port: 9092
+  env:
+    KAFKA_BROKER_ID: "1"
+    KAFKA_ZOOKEEPER_CONNECT: "dpn-zookeeper-target:2181"
+    KAFKA_LISTENERS: "INTERNAL://0.0.0.0:9092,INTERNAL_FQDN://0.0.0.0:9093"
+    KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "INTERNAL:PLAINTEXT,INTERNAL_FQDN:PLAINTEXT"
+    KAFKA_INTER_BROKER_LISTENER_NAME: "INTERNAL"
+    KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+    KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+    KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+    KAFKA_MESSAGE_MAX_BYTES: "10485760"
+    KAFKA_REPLICA_FETCH_MAX_BYTES: "10485760"
+    KAFKA_ADVERTISED_LISTENERS: "INTERNAL://dpn-kafka-target:9092,INTERNAL_FQDN://dpn-kafka-target.ns-dpn-01.svc.cluster.local:9093"
+    KAFKA_LOG_RETENTION_MS: "-1"
+    KAFKA_LOG_RETENTION_BYTES: "-1"
+    KAFKA_LOG_DIRS: "/var/lib/kafka/data/data"
+    
+  readinessProbe:
+    initialDelaySeconds: 20
+    periodSeconds: 10
+  livenessProbe:
+    initialDelaySeconds: 40
+    periodSeconds: 20
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+    limits:
+      cpu: "1000m"
+      memory: "2Gi"
+  persistence:
+    enabled: true
+    storageClass: managed-premium
+    size: 128Gi
+  securityContext:
+    runAsUser: 1001
+    runAsGroup: 0
+    fsGroup: 0
+    
+kafkaUI:
+  name: dpn-kafka-ui
+  replicaCount: 1
+  image:
+    repository: <<CONTAINER_REGISTRY_URL>>/ui-kafka
+    tag: "latest-dpn02"
+    pullPolicy: Always
+  service:
+#    port: 8080
+    port: 8086
+
+  env:
+    # Source Kafka
+    KAFKA_CLUSTERS_0_NAME: "source"
+    KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: "dpn-kafka-src:9092"
+    KAFKA_CLUSTERS_0_ZOOKEEPER: "dpn-zookeeper-src:2181"
+    # Target Kafka
+    KAFKA_CLUSTERS_1_NAME: "target"
+    KAFKA_CLUSTERS_1_BOOTSTRAPSERVERS: "dpn-kafka-target:9092"
+    KAFKA_CLUSTERS_1_ZOOKEEPER: "dpn-zookeeper-target:2181"
+    # UI Config
+#    SERVER_PORT: "8080"
+    SERVER_PORT: "8086"
+
+    AUTH_TYPE: "DISABLED"
+  readinessProbe:
+    initialDelaySeconds: 10
+    periodSeconds: 5
+  livenessProbe:
+    initialDelaySeconds: 30
+    periodSeconds: 10
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+
+kafkaTestData:
+  name: kafka-test-data
+  knowledgeFiles:
+    - simple-sample-test.dat
+    - simple-sample-test1.dat
+    - simple-sample-test2.dat
+
+kafkaTopicCreator:
+  enabled: false
+  name: dpn-kafka-topics-creator
+  backoffLimit: 5
+  image:
+    repository: <<CONTAINER_REGISTRY_URL>>/kafka-topic-creator
+    tag: "v2"
+    pullPolicy: Always
+  env:
+    BOOTSTRAP_VALUE: "dpn-kafka-src.ns-dpn-01.svc.cluster.local:9092"
+    KAFKA_TOPICS: "knowledge"
+
+kafkaTopicPopulator:
+  enabled: false
+  name: dpn-kafka-topics-populator
+  backoffLimit: 5
+  image:
+    repository: <<CONTAINER_REGISTRY_URL>>/kafka-topic-populator
+    tag: "v2"
+    pullPolicy: Always
+  env:
+    KAFKA_BROKER_SERVER: "dpn-kafka-src.ns-dpn-01.svc.cluster.local:9092"
+    KNOWLEDGE_TOPIC: "knowledge"
+    DATA_DELIMITER: "¬"
+  configMapRefs:
+    knowledgeDataConfigMap: "kafka-test-data"
+    knowledgeDataKey: "KNOWLEDGE_DATA"
+  volumeConfig:
+    name: "input-data"
+    configMapName: "kafka-input-data"
+    mountPath: "/tmp/input"
+
+federatorServer:
+  name: dpn-federator-server-1
+  replicaCount: 1
+  image:
+    repository: <<CONTAINER_REGISTRY_URL>>/federator-server
+    tag: "2.0.0"
+    pullPolicy: Always
+  service:
+    type: ClusterIP
+    port: 50051
+    lbPort: 50051
+    internalLoadBalancer: true
+    loadBalancerIP: <<your specific value>>
+  config:
+    management_node_base_url: <<your specific value>>
+    kafkaBootstrapServers: dpn-kafka-src:9092
+    redisHost: dpn-redis
+    redisPort: 6379
+  idp:
+    jwksUrl: <<your specific value>>
+    tokenUrl: <<your specific value>>
+    tokenBackoff: 1000
+    truststorePath: /tls/truststore.p12
+    keystorePath: /tls/client.p12
+    authMode: "private_key_jwt"
+    jwtAlgorithm: "RS256"
+    jwtKeyAlias: "federator"
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "512Mi"
+    limits:
+      cpu: "1000m"
+      memory: "1Gi"
+  storage:
+    azure:
+      endpoint: ""
+      connectionString: ""
+federatorClient:
+  name: dpn-federator-client-1
+  replicaCount: 1
+  image:
+    repository: <<CONTAINER_REGISTRY_URL>>/federator-client
+    tag: "2.0.0"
+    pullPolicy: Always
+  service:
+    grpcPort: 50052
+    jobRunnerPort: 8085
+    internalLoadBalancer: true
+    loadBalancerIP: <<your specific value>>
+  config:
+    management_node_base_url: <<your specific value>>
+    kafkaBootstrapServers: dpn-kafka-target:9092
+    redisHost: dpn-redis
+    redisPort: 6379
+    topicPrefix: federated-client1
+    targetTopic: dp-consumer-topic-stage
+    clientport: 50051
+  idp:
+    clientId: ztf-client
+    jwksUrl: <<your specific value>>
+    tokenUrl: <<your specific value>>
+    tokenBackoff: 1000
+    truststorePath: /tls/truststore.p12
+    keystorePath: /tls/client.p12
+    authMode: "private_key_jwt"
+    jwtAlgorithm: "RS256"
+    jwtKeyAlias: "federator"
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "512Mi"
+    limits:
+      cpu: "1000m"
+      memory: "1Gi"
+  storage:
+    provider: AZURE
+    tempDir: ""
+    azure:
+      container: ""
+      endpoint: ""
+      connectionString: ""
+
+keyvault:
+  # Master switch for secret sourcing:
+  #   enabled: true  -> pull secrets from Azure Key Vault via SecretProviderClass (CSI driver)
+  #   enabled: false -> Key Vault not used; create the Kubernetes Secret directly from the
+  #                     values under `secrets:` below (fallback mode)
+  enabled: true
+  clientID:
+  name:
+  tenantId:
+
+# Fallback secret values. Used ONLY when keyvault.enabled = false.
+# When keyvault.enabled = true these are ignored (the secret is synced from Key Vault).
+# Prefer injecting these at deploy time via --set / --set-file rather than committing values.
+secrets:
+  server:
+    storageConnectionString: ""
+  client:
+    storageConnectionString: ""
+
+fileShare:
+     pvcName: pvc-dpn-certs-fileshare
+
+vaultConfig:
+  uri: https://vault-https.ns-dpn-01.svc.cluster.local:8200
+  truststorePath: /vault/truststore/truststore.jks
+  truststorePassword: ""
+  keystorePasswordPath: node-net/client/keystore-password#password
+  truststorePasswordPath: node-net/client/truststore-password#password
+    
+
+otel:
+  env:
+    FEDERATOR_CLIENT_PROPERTIES: "src/configs/client.properties"
+
+    OTEL_SERVICE_NAME_CLIENT: "federator-client"
+    OTEL_TRACES_SAMPLER: "parentbased_traceidratio"
+    OTEL_TRACES_SAMPLER_ARG: "1.0"
+
+    FEDERATOR_SERVER_PROPERTIES: "src/configs/server.properties"
+
+    OTEL_SERVICE_NAME_SERVER: "federator-server"
+

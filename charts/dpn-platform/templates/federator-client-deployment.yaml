@@ -1,0 +1,126 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.federatorClient.name }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  replicas: {{ .Values.federatorClient.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ .Values.federatorClient.name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.federatorClient.name }}
+    spec:
+      containers:
+        - name: {{ .Values.federatorClient.name }}
+          image: "{{ .Values.federatorClient.image.repository }}:{{ .Values.federatorClient.image.tag }}"
+          imagePullPolicy: {{ .Values.federatorClient.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              exec java \
+                -Djava.net.preferIPv4Stack=true \
+                -Djava.net.preferIPv6Addresses=false \
+                -Dnetworkaddress.cache.negative.ttl=0 \
+                -Dvault.truststore.password="$VAULT_TRUSTSTORE_PASSWORD" \
+                -Dazure.storage.connection.string="$AZURE_STORAGE_CONNECTION_STRING" \
+                $PROPERTIES \
+                -cp /app/app.jar:/library/* \
+                uk.gov.dbt.ndtp.federator.FederatorClient \
+                $ARGS
+          env:
+            - name: FEDERATOR_CLIENT_PROPERTIES
+              value: /config/client.properties
+            - name: AZURE_CLIENT_ID
+              value: {{ .Values.keyvault.clientID }}
+            - name: VAULT_TRUSTSTORE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: certificate-manager-secrets
+                  key: SPRING_CLOUD_VAULT_SSL_TRUST_STORE_PASSWORD
+            - name: VAULT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: certificate-manager-secrets
+                  key: VAULT_TOKEN
+            - name: VAULT_KEYSTORE_PASSWORD_PATH
+              value: {{ .Values.vaultConfig.keystorePasswordPath }}
+            - name: VAULT_TRUSTSTORE_PASSWORD_PATH
+              value: {{ .Values.vaultConfig.truststorePasswordPath }}
+            - name: AZURE_STORAGE_CONNECTION_STRING
+              valueFrom:
+                secretKeyRef:
+                  name: federator-client-secrets
+                  key: STORAGE_CONNECTION_STRING
+
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ .Values.otel.env.OTEL_EXPORTER_OTLP_ENDPOINT | quote }}
+
+            - name: OTEL_EXPORTER_OTLP_PROTOCOL
+              value: {{ .Values.otel.env.OTEL_EXPORTER_OTLP_PROTOCOL | quote }}
+
+            - name: OTEL_EXPORTER_OTLP_INSECURE
+              value: {{ .Values.otel.env.OTEL_EXPORTER_OTLP_INSECURE | quote }}
+
+            - name: OTEL_SERVICE_NAME
+              value: {{ .Values.otel.env.OTEL_SERVICE_NAME_CLIENT | quote }}
+
+            - name: OTEL_TRACES_SAMPLER
+              value: {{ .Values.otel.env.OTEL_TRACES_SAMPLER | quote }}
+
+            - name: OTEL_TRACES_SAMPLER_ARG
+              value: {{ .Values.otel.env.OTEL_TRACES_SAMPLER_ARG | quote }}
+          envFrom:
+            - secretRef:
+                name: federator-client-secrets
+    
+          
+          ports:
+            - containerPort: {{ .Values.federatorClient.service.grpcPort }}
+            - containerPort: {{ .Values.federatorClient.service.jobRunnerPort }}
+          {{- with .Values.federatorClient.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: config
+              mountPath: /config
+            - name: tls
+              mountPath: /tls
+              readOnly: true
+            {{- if .Values.keyvault.enabled }}
+            - name: client-secrets-store
+              mountPath: /mnt/secrets
+              readOnly: true
+            {{- end }}
+            - name: vault-truststore
+              mountPath: /vault/truststore
+              readOnly: true
+      volumes:
+        - name: config
+          projected:
+            sources:
+              - configMap:
+                  name: federator-client-config
+              - configMap:
+                  name: federator-client-connection-config
+              - configMap:
+                  name: federator-common-config-client
+        - name: tls
+          persistentVolumeClaim:
+            claimName: {{ .Values.fileShare.pvcName }}
+        {{- if .Values.keyvault.enabled }}
+        - name: client-secrets-store
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: federator-client-kv-secrets
+        {{- end }}
+        - name: vault-truststore
+          secret:
+            secretName: cert-manager-truststore

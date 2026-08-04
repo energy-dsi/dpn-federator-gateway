@@ -1,0 +1,40 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.federatorClient.name }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  type: ClusterIP
+  selector:
+    app: {{ .Values.federatorClient.name }}
+  ports:
+    - name: grpc
+      port: {{ .Values.federatorClient.service.grpcPort }}
+      targetPort: {{ .Values.federatorClient.service.grpcPort }}
+      protocol: {{ default "TCP" .Values.federatorClient.service.protocol }}
+    - name: job-runner
+      port: {{ .Values.federatorClient.service.jobRunnerPort }}
+      targetPort: {{ .Values.federatorClient.service.jobRunnerPort }}
+      protocol: {{ default "TCP" .Values.federatorClient.service.protocol }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.federatorClient.name }}-external
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+spec:
+  type: LoadBalancer
+  loadBalancerIP: {{ .Values.federatorClient.service.loadBalancerIP }}
+  selector:
+    app: {{ .Values.federatorClient.name }}
+  ports:
+    - name: grpc
+      port: {{ default .Values.federatorClient.service.grpcPort .Values.federatorClient.service.lbGrpcPort }}
+      targetPort: {{ .Values.federatorClient.service.grpcPort }}
+      protocol: {{ default "TCP" .Values.federatorClient.service.protocol }}
+    - name: job-runner
+      port: {{ .Values.federatorClient.service.jobRunnerPort }}
+      targetPort: {{ .Values.federatorClient.service.jobRunnerPort }}
+      protocol: {{ default "TCP" .Values.federatorClient.service.protocol }}

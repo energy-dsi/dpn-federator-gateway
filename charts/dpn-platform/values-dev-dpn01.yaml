@@ -1,0 +1,323 @@
+redis:
+  name: dpn-redis
+  replicaCount: 1
+  image:
+    repository: <<CONTAINER_REGISTRY_URL>>/dpn-redis
+    tag: "7.2"
+    pullPolicy: Always
+  service:
+    port: 6379
+    type: ClusterIP
+  args:
+    - "--save"
+    - ""
+    - "--appendonly"
+    - "no"
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "256Mi"
+
+zookeeperSrc:
+  name: dpn-zookeeper-src
+  replicaCount: 1
+  image:
+    repository: <<CONTAINER_REGISTRY_URL>>/dpn-zookeeper
+    tag: "7.5.3"
+    pullPolicy: Always
+  service:
+    port: 2181
+  env:
+    ZOOKEEPER_CLIENT_PORT: "2181"
+    ZOOKEEPER_SERVER_ID: "1"
+    ZOOKEEPER_SERVERS: "dpn-zookeeper-src:2888:3888"
+  readinessProbe:
+    initialDelaySeconds: 10
+    periodSeconds: 5
+  livenessProbe:
+    initialDelaySeconds: 20
+    periodSeconds: 10
+  persistence:
+    enabled: true
+    storageClass: managed-premium
+    size: 8Gi
+  securityContext:
+    runAsUser: 1000
+    runAsGroup: 0
+    fsGroup: 0
+
+zookeeperTarget:
+  name: dpn-zookeeper-target
+  replicaCount: 1
+  image:
+    repository: <<CONTAINER_REGISTRY_URL>>/dpn-zookeeper
+    tag: "7.5.3"
+    pullPolicy: Always
+  service:
+    port: 2181
+  env:
+    ZOOKEEPER_CLIENT_PORT: "2181"
+    ZOOKEEPER_SERVER_ID: "1"
+    ZOOKEEPER_SERVERS: "dpn-zookeeper-target:2888:3888"
+  readinessProbe:
+    initialDelaySeconds: 10
+    periodSeconds: 5
+  livenessProbe:
+    initialDelaySeconds: 20
+    periodSeconds: 10
+  persistence:
+    enabled: true
+    storageClass: managed-premium
+    size: 8Gi
+  securityContext:
+    runAsUser: 1000
+    runAsGroup: 0
+    fsGroup: 0
+    
+kafkaSrc:
+  name: dpn-kafka-src
+  replicaCount: 1
+  image:
+    repository: <<CONTAINER_REGISTRY_URL>>/dpn-kafka
+    tag: "7.5.3"
+    pullPolicy: Always
+  service:
+    port: 9092
+  env:
+    KAFKA_BROKER_ID: "1"
+    KAFKA_ZOOKEEPER_CONNECT: "dpn-zookeeper-src:2181"
+    KAFKA_LISTENERS: "INTERNAL://0.0.0.0:9092,INTERNAL_FQDN://0.0.0.0:9093"
+    KAFKA_ADVERTISED_LISTENERS: "INTERNAL://dpn-kafka-src:9092,INTERNAL_FQDN://dpn-kafka-src.ns-dpn-01.svc.cluster.local:9093"
+    KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "INTERNAL:PLAINTEXT,INTERNAL_FQDN:PLAINTEXT"
+    KAFKA_INTER_BROKER_LISTENER_NAME: "INTERNAL"
+    KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+    KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+    KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+    KAFKA_MESSAGE_MAX_BYTES: "10485760"
+    KAFKA_REPLICA_FETCH_MAX_BYTES: "10485760"
+    KAFKA_LOG_RETENTION_MS: "-1"
+    KAFKA_LOG_RETENTION_BYTES: "-1"
+    KAFKA_LOG_DIRS: "/var/lib/kafka/data/data"
+
+  readinessProbe:
+    initialDelaySeconds: 20
+    periodSeconds: 10
+  livenessProbe:
+    initialDelaySeconds: 40
+    periodSeconds: 20
+  persistence:
+    enabled: true
+    storageClass: managed-premium
+    size: 128Gi
+  securityContext:
+    runAsUser: 1001
+    runAsGroup: 0
+    fsGroup: 0
+
+kafkaTarget:
+  name: dpn-kafka-target
+  replicaCount: 1
+  image:
+    repository: <<CONTAINER_REGISTRY_URL>>/dpn-kafka
+    tag: "7.5.3"
+    pullPolicy: Always
+  service:
+    port: 9092
+  env:
+    KAFKA_BROKER_ID: "1"
+    KAFKA_ZOOKEEPER_CONNECT: "dpn-zookeeper-target:2181"
+    KAFKA_LISTENERS: "INTERNAL://0.0.0.0:9092,INTERNAL_FQDN://0.0.0.0:9093"
+    KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "INTERNAL:PLAINTEXT,INTERNAL_FQDN:PLAINTEXT"
+    KAFKA_INTER_BROKER_LISTENER_NAME: "INTERNAL"
+    KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+    KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+    KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+    KAFKA_MESSAGE_MAX_BYTES: "10485760"
+    KAFKA_REPLICA_FETCH_MAX_BYTES: "10485760"
+    KAFKA_LOG_RETENTION_MS: "-1"
+    KAFKA_LOG_RETENTION_BYTES: "-1"
+    KAFKA_LOG_DIRS: "/var/lib/kafka/data/data"
+    KAFKA_ADVERTISED_LISTENERS: "INTERNAL://dpn-kafka-target:9092,INTERNAL_FQDN://dpn-kafka-target.ns-dpn-01.svc.cluster.local:9093"
+
+
+  readinessProbe:
+    initialDelaySeconds: 20
+    periodSeconds: 10
+  livenessProbe:
+    initialDelaySeconds: 40
+    periodSeconds: 20
+  persistence:
+    enabled: true
+    storageClass: managed-premium
+    size: 128Gi
+  securityContext:
+    runAsUser: 1001
+    runAsGroup: 0
+    fsGroup: 0
+    
+kafkaUI:
+  name: dpn-kafka-ui
+  replicaCount: 1
+  image:
+    repository: <<CONTAINER_REGISTRY_URL>>/ui-kafka
+    tag: "latest-dpn02"
+    pullPolicy: Always
+  service:
+#    port: 8080
+    port: 8086
+
+  env:
+    # Source Kafka
+    KAFKA_CLUSTERS_0_NAME: "source"
+    KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: "dpn-kafka-src:9092"
+    KAFKA_CLUSTERS_0_ZOOKEEPER: "dpn-zookeeper-src:2181"
+    # Target Kafka
+    KAFKA_CLUSTERS_1_NAME: "target"
+    KAFKA_CLUSTERS_1_BOOTSTRAPSERVERS: "dpn-kafka-target:9092"
+    KAFKA_CLUSTERS_1_ZOOKEEPER: "dpn-zookeeper-target:2181"
+    # UI Config
+#    SERVER_PORT: "8080"
+    SERVER_PORT: "8086"
+
+    AUTH_TYPE: "DISABLED"
+  readinessProbe:
+    initialDelaySeconds: 10
+    periodSeconds: 5
+  livenessProbe:
+    initialDelaySeconds: 30
+    periodSeconds: 10
+
+kafkaTestData:
+  name: kafka-test-data
+  knowledgeFiles:
+    - simple-sample-test.dat
+    - simple-sample-test1.dat
+    - simple-sample-test2.dat
+
+kafkaTopicCreator:
+  name: dpn-kafka-topics-creator
+  backoffLimit: 5
+  image:
+    repository: <<CONTAINER_REGISTRY_URL>>/kafka-topic-creator
+    tag: "v2"
+    pullPolicy: Always
+  env:
+    BOOTSTRAP_VALUE: "dpn-kafka-src.ns-dpn-01.svc.cluster.local:9092"
+    KAFKA_TOPICS: "knowledge"
+
+kafkaTopicPopulator:
+  name: dpn-kafka-topics-populator
+  backoffLimit: 5
+  image:
+    repository: <<CONTAINER_REGISTRY_URL>>/kafka-topic-populator
+    tag: "v2"
+    pullPolicy: Always
+  env:
+    KAFKA_BROKER_SERVER: "dpn-kafka-src.ns-dpn-01.svc.cluster.local:9092"
+    KNOWLEDGE_TOPIC: "knowledge"
+    DATA_DELIMITER: "¬"
+  configMapRefs:
+    knowledgeDataConfigMap: "kafka-test-data"
+    knowledgeDataKey: "KNOWLEDGE_DATA"
+  volumeConfig:
+    name: "input-data"
+    configMapName: "kafka-input-data"
+    mountPath: "/tmp/input"
+
+federatorServer:
+  name: dpn-federator-server-1
+  replicaCount: 1
+  image:
+    repository: <<CONTAINER_REGISTRY_URL>>/dpn-federator-server
+    tag: "2.0.0"
+    pullPolicy: Always
+  service:
+    type: ClusterIP
+    port: 50051
+    lbPort: 443
+    internalLoadBalancer: true
+    loadBalancerIP: <<your specific value>>
+  config:
+    management_node_base_url: <<your specific value>>
+    kafkaBootstrapServers: dpn-kafka-src:9092
+    redisHost: dpn-redis
+    redisPort: 6379
+  idp:
+    clientId: <<your specific value>>
+    jwksUrl: <<your specific value>>
+    tokenUrl: <<your specific value>>
+    tokenBackoff: 1000
+    truststorePath: /tls/truststore.p12
+    keystorePath: /tls/keystore.p12
+    authMode: "private_key_jwt"
+    jwtAlgorithm: "RS256"
+    jwtKeyAlias: "federator"
+  storage:
+    azure:
+      endpoint: "<<your specific value>>"
+      connectionString: ""
+federatorClient:
+  name: dpn-federator-client-1
+  replicaCount: 1
+  image:
+    repository: <<CONTAINER_REGISTRY_URL>>/dpn-federator-client
+    tag: "2.0.0"
+    pullPolicy: Always
+  service:
+    grpcPort: 50052
+    lbGrpcPort: 443
+    jobRunnerPort: 8085
+    internalLoadBalancer: true
+    loadBalancerIP: <<your specific value>>
+
+  config:
+    management_node_base_url: <<your specific value>>
+    kafkaBootstrapServers: dpn-kafka-target:9092
+    redisHost: dpn-redis
+    redisPort: 6379
+    topicPrefix: federated-client1
+    targetTopic: dp-consumer-topic-stage
+    clientport: 50051
+    
+  idp:
+    clientId: <<your specific value>>
+    jwksUrl: <<your specific value>>
+    tokenUrl: <<your specific value>>
+    tokenBackoff: 1000
+    truststorePath: /tls/truststore.p12
+    keystorePath: /tls/keystore.p12
+    authMode: "private_key_jwt"
+    jwtAlgorithm: "RS256"
+    jwtKeyAlias: "federator"
+  storage:
+    provider: AZURE
+    tempDir: "/tmp/federator-files"
+    azure:
+      container: "dp-consumer-raw"
+      endpoint: "<<your specific value>>"
+      connectionString: ""
+
+keyvault:
+  clientID: <<your specific value>>
+  name: <<your specific value>>
+  tenantId: <<your specific value>>
+
+fileShare:
+     pvcName: pvc-dpn-certs-fileshare
+
+vaultConfig:
+  uri: https://vault-https.ns-dpn-01.svc.cluster.local:8200
+  truststorePath: /vault/truststore/truststore.jks
+  truststorePassword: ""
+  keystorePasswordPath: node-net/client/keystore-password#password
+  truststorePasswordPath: node-net/client/truststore-password#password
+    
+
+otel:
+  env:
+    OTEL_EXPORTER_OTLP_ENDPOINT: "http://dpn-otel-collector.ns-dpn-health-01.svc.cluster.local:4317"
+    OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
+    OTEL_EXPORTER_OTLP_INSECURE: "true"

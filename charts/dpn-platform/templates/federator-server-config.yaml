@@ -1,0 +1,50 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: federator-server-config
+  namespace: {{ .Release.Namespace }}
+data:
+  server.properties: |
+    kafka.bootstrapServers={{ .Values.federatorServer.config.kafkaBootstrapServers }}
+    kafka.defaultKeyDeserializerClass=org.apache.kafka.common.serialization.StringDeserializer
+    kafka.defaultValueDeserializerClass=uk.gov.dbt.ndtp.federator.access.AccessMessageDeserializer
+    kafka.consumerGroup=server.consumer
+    kafka.pollDuration=PT10S
+    kafka.pollRecords=100
+
+    shared.headers=Security-Label^Content-Type
+    filter.shareAll=false
+
+    server.port={{ .Values.federatorServer.service.port }}
+    server.tlsEnabled=true
+    server.mtlsEnabled=false
+    server.keepAliveTime=10
+    server.certReloadIntervalSeconds=3600
+
+    server.p12FilePath=/tls/keystore.p12
+    server.p12Password=
+    server.truststoreFilePath=/tls/truststore.p12
+    server.truststorePassword=
+    server.heartbeat.enabled=true
+    server.heartbeat.interval=PT1H
+
+    common.configuration=/config/common-configuration.properties
+    connections.configuration=/config/connection-configuration.json
+
+    federator.producer.id=
+
+    management.node.base.url={{ .Values.federatorServer.config.management_node_base_url }}
+    management.node.request.timeout=60
+    management.node.cache.ttl.seconds=60
+    management.node.api.endpoints.producer=
+
+    redis.host={{ .Values.federatorServer.config.redisHost }}
+    redis.port={{ .Values.federatorServer.config.redisPort }}
+    redis.tls.enabled=false
+    redis.prefix=federator-server
+    redis.username=
+    redis.password=
+    redis.aes.key=
+
+    azure.storage.endpoint={{ .Values.federatorServer.storage.azure.endpoint }}
+    azure.storage.connection.string={{ .Values.federatorServer.storage.azure.connectionString }}
