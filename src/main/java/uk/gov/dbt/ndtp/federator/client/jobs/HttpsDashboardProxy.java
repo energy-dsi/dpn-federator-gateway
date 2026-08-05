@@ -122,12 +122,28 @@ public final class HttpsDashboardProxy {
                     }
                 });
 
+                int status = response.statusCode();
+                // 204 (No Content) and 304 (Not Modified) forbid a response body, as does any
+                // response to a HEAD request. For those, -1 sends headers only; passing 0 would
+                // select chunked encoding and emit an (illegal) body, which the JDK server rejects.
+                // JobRunr's dashboard returns 204 on job/recurring-job deletes.
+                boolean noBody = status == 204 || status == 304 || "HEAD".equalsIgnoreCase(method);
                 // 0 = chunked transfer encoding; response length is unknown up front and this also
                 // lets SSE responses stream through as they're written rather than being buffered.
-                exchange.sendResponseHeaders(response.statusCode(), 0);
-                try (InputStream in = response.body();
-                        OutputStream out = exchange.getResponseBody()) {
-                    in.transferTo(out);
+                exchange.sendResponseHeaders(status, noBody ? -1 : 0);
+                try (InputStream in = response.body()) {
+                    if (!noBody) {
+                        try (OutputStream out = exchange.getResponseBody()) {
+                            byte[] buf = new byte[8192];
+                            int n;
+                            while ((n = in.read(buf)) != -1) {
+                                out.write(buf, 0, n);
+                                // Flush each read so tiny SSE events reach the browser immediately
+                                // instead of sitting in the chunked-output buffer until it fills.
+                                out.flush();
+                            }
+                        }
+                    }
                 }
             } catch (IOException | InterruptedException e) {
                 if (e instanceof InterruptedException) {
