@@ -62,7 +62,7 @@ import uk.gov.dbt.ndtp.federator.server.grpc.GRPCServer;
  *     <li>shared.headers - The headers to share</li>
  * </ul>
  */
-public class FederatorServer {
+public class    FederatorServer {
 
     public static final String ENV_SERVER_PROPS = "FEDERATOR_SERVER_PROPERTIES";
     public static final String SERVER_PROPERTIES = "server.properties";
