@@ -34,8 +34,13 @@ import uk.gov.dbt.ndtp.federator.common.utils.SSLUtils;
  * JobRunr's dashboard server (built on {@code com.sun.net.httpserver.HttpServer}) has no TLS
  * support in its public configuration API. This listens on a public HTTPS port using a
  * self-signed PKCS12 keystore and forwards every request to the plain-HTTP dashboard running on
- * an internal-only port, streaming the response body back rather than buffering it so the
+ * a separate port, streaming the response body back rather than buffering it so the
  * dashboard's SSE-based live updates keep working.
+ * <p>
+ * SECURITY: the upstream plain-HTTP port is bound by JobRunr on 0.0.0.0 (its OSS config offers no
+ * bind-address option). This proxy's TLS is only meaningful if that plaintext port is unreachable
+ * from outside the host - enforce that at the network layer (firewall / do not expose the port /
+ * Kubernetes NetworkPolicy). See {@link DefaultJobSchedulerProvider}.
  */
 @Slf4j
 public final class HttpsDashboardProxy {

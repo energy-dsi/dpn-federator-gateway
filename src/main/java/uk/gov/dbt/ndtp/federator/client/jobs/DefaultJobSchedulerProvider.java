@@ -39,8 +39,11 @@ import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
  *   <li>jobs.storage.provider = memory</li>
  *   <li>jobs.dashboard.https.enabled = false - fronts jobs.dashboard.port with HTTPS via
  *       {@link HttpsDashboardProxy} (JobRunr's own dashboard has no TLS support). When enabled,
- *       jobs.dashboard.port should be an internal-only port and jobs.dashboard.https.port the
- *       one actually exposed.</li>
+ *       jobs.dashboard.port must be treated as internal-only and jobs.dashboard.https.port is the
+ *       one actually exposed. Note: JobRunr's OSS dashboard still binds jobs.dashboard.port on
+ *       0.0.0.0 (no bind-address option), so "internal-only" must be enforced at the network layer
+ *       (firewall / do not expose the port / NetworkPolicy) - the proxy's TLS is bypassable
+ *       otherwise.</li>
  *   <li>jobs.dashboard.https.port = 8443</li>
  *   <li>jobs.dashboard.https.p12FilePath - required when https enabled</li>
  *   <li>jobs.dashboard.https.p12Password - required when https enabled</li>
@@ -138,6 +141,13 @@ public final class DefaultJobSchedulerProvider implements JobSchedulerProvider {
                 cfg = cfg.useBackgroundJobServer();
             }
             if (dashboardEnabled) {
+                // SECURITY: JobRunr's OSS dashboard server binds 0.0.0.0 (its configuration API
+                // exposes only a port, no bind address), so dashboardPort is reachable on every
+                // interface. When HTTPS is enabled, HttpsDashboardProxy fronts this plaintext port
+                // with TLS - but that TLS is only meaningful if the plaintext port is unreachable
+                // from outside the host. This is a DEPLOYMENT responsibility that code cannot
+                // enforce: in Kubernetes do not list dashboardPort in the Service/container ports
+                // (and add a NetworkPolicy); on a bare VM, firewall it. Do NOT expose dashboardPort.
                 cfg = cfg.useDashboard(dashboardPort);
             }
             jobScheduler = cfg.initialize().getJobScheduler();
