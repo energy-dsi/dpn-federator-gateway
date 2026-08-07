@@ -48,6 +48,7 @@ import uk.gov.dbt.ndtp.federator.common.service.idp.IdpTokenService;
 import uk.gov.dbt.ndtp.federator.common.service.ocsp.OcspCertificateVerificationService;
 import uk.gov.dbt.ndtp.federator.common.service.ocsp.OcspCertificateVerificationServiceImpl;
 import uk.gov.dbt.ndtp.federator.common.service.secret.SecretProvider;
+import uk.gov.dbt.ndtp.federator.common.service.secret.VaultTlsSupport;
 import uk.gov.dbt.ndtp.federator.common.telemetry.OpenTelemetryConfig;
 import uk.gov.dbt.ndtp.federator.common.utils.GRPCUtils;
 import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
@@ -168,23 +169,30 @@ public class GRPCServer implements AutoCloseable {
 
     @SneakyThrows
     private ServerCredentials generateServerCredentials() {
+        KeyManager[] keyManagerFromP12;
+        TrustManager[] trustManager;
 
-        String p12FilePath = PropertyUtil.getPropertyValue(SERVER_P12_FILE_PATH);
-        String p12Password = PropertyUtil.getPropertyValue(SERVER_P12_PASSWORD);
-        String trustStoreFilePath = PropertyUtil.getPropertyValue(SERVER_TRUSTSTORE_FILE_PATH);
-        String trustStorePassword = PropertyUtil.getPropertyValue(SERVER_TRUSTSTORE_PASSWORD);
+        if (VaultTlsSupport.isVaultTlsEnabled()) {
+            LOGGER.info("Server TLS material sourced from Vault (no keystore files on disk).");
+            keyManagerFromP12 = VaultTlsSupport.keyManagers();
+            trustManager = VaultTlsSupport.trustManagers();
+        } else {
+            String p12FilePath = PropertyUtil.getPropertyValue(SERVER_P12_FILE_PATH);
+            String p12Password = PropertyUtil.getPropertyValue(SERVER_P12_PASSWORD);
+            String trustStoreFilePath = PropertyUtil.getPropertyValue(SERVER_TRUSTSTORE_FILE_PATH);
+            String trustStorePassword = PropertyUtil.getPropertyValue(SERVER_TRUSTSTORE_PASSWORD);
 
-        LOGGER.info(
-                "Using p12 file path: {}, truststore file path: {}, p12 password is set: {}, truststore password is"
-                        + " set: {}",
-                p12FilePath,
-                trustStoreFilePath,
-                p12Password != null,
-                trustStorePassword != null);
+            LOGGER.info(
+                    "Using p12 file path: {}, truststore file path: {}, p12 password is set: {}, truststore password is"
+                            + " set: {}",
+                    p12FilePath,
+                    trustStoreFilePath,
+                    p12Password != null,
+                    trustStorePassword != null);
 
-        KeyManager[] keyManagerFromP12 = SSLUtils.createKeyManagerFromP12(p12FilePath, p12Password);
-        TrustManager[] trustManager = SSLUtils.createTrustManager(trustStoreFilePath, trustStorePassword);
-
+            keyManagerFromP12 = SSLUtils.createKeyManagerFromP12(p12FilePath, p12Password);
+            trustManager = SSLUtils.createTrustManager(trustStoreFilePath, trustStorePassword);
+        }
         // Unwrap the freshly loaded X509 managers and either install them (first call, at construction
         // time) or hot-swap them into the already-installed reloadable managers (subsequent scheduled
         // reloads). The gRPC server is built once from the stable reloadable managers, so a swap is
