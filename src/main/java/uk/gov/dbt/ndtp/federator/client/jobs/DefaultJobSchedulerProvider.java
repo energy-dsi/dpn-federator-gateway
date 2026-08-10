@@ -19,6 +19,7 @@ import org.jobrunr.storage.InMemoryStorageProvider;
 import uk.gov.dbt.ndtp.federator.client.jobs.params.JobParams;
 import uk.gov.dbt.ndtp.federator.client.jobs.params.RecurrentJobRequest;
 import uk.gov.dbt.ndtp.federator.client.lifecycle.ShutdownThread;
+import uk.gov.dbt.ndtp.federator.common.service.secret.VaultTlsSupport;
 import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
 
 /**
@@ -156,9 +157,18 @@ public final class DefaultJobSchedulerProvider implements JobSchedulerProvider {
                     && PropertyUtil.getPropertyBooleanValue(PROP_DASHBOARD_HTTPS_ENABLED, "false");
             if (dashboardHttpsEnabled) {
                 int httpsPort = PropertyUtil.getPropertyIntValue(PROP_DASHBOARD_HTTPS_PORT, "8443");
-                String p12FilePath = PropertyUtil.getPropertyValue(PROP_DASHBOARD_HTTPS_P12_FILE_PATH);
-                String p12Password = PropertyUtil.getPropertyValue(PROP_DASHBOARD_HTTPS_P12_PASSWORD);
-                httpsDashboardProxy = new HttpsDashboardProxy(httpsPort, dashboardPort, p12FilePath, p12Password);
+                if (VaultTlsSupport.isVaultTlsEnabled()) {
+                    // Reuse the federator's Vault-issued identity certificate/key (the same material
+                    // the gRPC and IDP mTLS clients use, built in memory) to terminate TLS for the
+                    // dashboard - no dashboard keystore file on disk. Same switch as GRPCServer.
+                    log.info("Dashboard HTTPS certificate sourced from Vault (no keystore file on disk).");
+                    httpsDashboardProxy =
+                            new HttpsDashboardProxy(httpsPort, dashboardPort, VaultTlsSupport.keyManagers());
+                } else {
+                    String p12FilePath = PropertyUtil.getPropertyValue(PROP_DASHBOARD_HTTPS_P12_FILE_PATH);
+                    String p12Password = PropertyUtil.getPropertyValue(PROP_DASHBOARD_HTTPS_P12_PASSWORD);
+                    httpsDashboardProxy = new HttpsDashboardProxy(httpsPort, dashboardPort, p12FilePath, p12Password);
+                }
                 httpsDashboardProxy.start();
             }
 
