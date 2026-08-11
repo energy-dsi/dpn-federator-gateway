@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
+import javax.net.ssl.KeyManager;
 import lombok.extern.slf4j.Slf4j;
 import org.jobrunr.configuration.JobRunr;
 import org.jobrunr.jobs.RecurringJob;
@@ -19,8 +20,8 @@ import org.jobrunr.storage.InMemoryStorageProvider;
 import uk.gov.dbt.ndtp.federator.client.jobs.params.JobParams;
 import uk.gov.dbt.ndtp.federator.client.jobs.params.RecurrentJobRequest;
 import uk.gov.dbt.ndtp.federator.client.lifecycle.ShutdownThread;
-import uk.gov.dbt.ndtp.federator.common.service.secret.VaultTlsSupport;
 import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
+import uk.gov.dbt.ndtp.federator.common.utils.SSLUtils;
 
 /**
  * Singleton provider to configure and manage the lifecycle of JobRunr background job scheduler.
@@ -66,8 +67,8 @@ public final class DefaultJobSchedulerProvider implements JobSchedulerProvider {
     // jobs.dashboard.port becomes an internal-only port and this proxy fronts it with HTTPS.
     private static final String PROP_DASHBOARD_HTTPS_ENABLED = "jobs.dashboard.https.enabled";
     private static final String PROP_DASHBOARD_HTTPS_PORT = "jobs.dashboard.https.port";
-    private static final String PROP_DASHBOARD_HTTPS_P12_FILE_PATH = "jobs.dashboard.https.p12FilePath";
-    private static final String PROP_DASHBOARD_HTTPS_P12_PASSWORD = "jobs.dashboard.https.p12Password";
+    private static final String PROP_DASHBOARD_HTTPS_CERT_FILE_PATH = "jobs.dashboard.https.certFilePath";
+    private static final String PROP_DASHBOARD_HTTPS_KEY_FILE_PATH = "jobs.dashboard.https.keyFilePath";
     private final Object lifecycleLock = new Object();
     private boolean started = false;
     // Keep reference so we can close when stopping (for in-memory case)
@@ -157,18 +158,10 @@ public final class DefaultJobSchedulerProvider implements JobSchedulerProvider {
                     && PropertyUtil.getPropertyBooleanValue(PROP_DASHBOARD_HTTPS_ENABLED, "false");
             if (dashboardHttpsEnabled) {
                 int httpsPort = PropertyUtil.getPropertyIntValue(PROP_DASHBOARD_HTTPS_PORT, "8443");
-                if (VaultTlsSupport.isVaultTlsEnabled()) {
-                    // Reuse the federator's Vault-issued identity certificate/key (the same material
-                    // the gRPC and IDP mTLS clients use, built in memory) to terminate TLS for the
-                    // dashboard - no dashboard keystore file on disk. Same switch as GRPCServer.
-                    log.info("Dashboard HTTPS certificate sourced from Vault (no keystore file on disk).");
-                    httpsDashboardProxy =
-                            new HttpsDashboardProxy(httpsPort, dashboardPort, VaultTlsSupport.keyManagers());
-                } else {
-                    String p12FilePath = PropertyUtil.getPropertyValue(PROP_DASHBOARD_HTTPS_P12_FILE_PATH);
-                    String p12Password = PropertyUtil.getPropertyValue(PROP_DASHBOARD_HTTPS_P12_PASSWORD);
-                    httpsDashboardProxy = new HttpsDashboardProxy(httpsPort, dashboardPort, p12FilePath, p12Password);
-                }
+                String certFilePath = PropertyUtil.getPropertyValue(PROP_DASHBOARD_HTTPS_CERT_FILE_PATH);
+                String keyFilePath = PropertyUtil.getPropertyValue(PROP_DASHBOARD_HTTPS_KEY_FILE_PATH);
+                KeyManager[] keyManagers = SSLUtils.createKeyManagerFromPem(certFilePath, keyFilePath);
+                httpsDashboardProxy = new HttpsDashboardProxy(httpsPort, dashboardPort, keyManagers);
                 httpsDashboardProxy.start();
             }
 

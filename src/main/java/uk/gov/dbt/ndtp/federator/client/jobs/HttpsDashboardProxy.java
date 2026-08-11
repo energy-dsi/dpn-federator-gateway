@@ -57,9 +57,9 @@ public final class HttpsDashboardProxy {
     private final String upstreamBaseUrl;
 
     /**
-     * Builds the proxy from a PKCS12 keystore file on disk. Prefer the {@link KeyManager}[]
-     * constructor with Vault-sourced material where available (see
-     * {@code VaultTlsSupport#keyManagers()}); this remains for the file-based fallback.
+     * Builds the proxy from a PKCS12 keystore file on disk. Retained as an alternative to the
+     * PEM cert/key path (see {@code SSLUtils#createKeyManagerFromPem}); delegates to the
+     * {@link KeyManager}[] constructor.
      */
     public HttpsDashboardProxy(int httpsPort, int upstreamPort, String p12FilePath, String p12Password) {
         this(httpsPort, upstreamPort, SSLUtils.createKeyManagerFromP12(p12FilePath, p12Password));
@@ -67,8 +67,8 @@ public final class HttpsDashboardProxy {
 
     /**
      * Builds the proxy from pre-constructed {@link KeyManager}s, allowing the dashboard's TLS
-     * identity to come from any source - e.g. the federator's Vault-issued certificate/key
-     * (built in memory, never written to disk) rather than a keystore file.
+     * identity to come from any source - e.g. a PEM certificate/key pair loaded via
+     * {@code SSLUtils#createKeyManagerFromPem} - rather than being tied to a keystore file.
      */
     public HttpsDashboardProxy(int httpsPort, int upstreamPort, KeyManager[] keyManagers) {
         this.upstreamBaseUrl = "http://localhost:" + upstreamPort;
