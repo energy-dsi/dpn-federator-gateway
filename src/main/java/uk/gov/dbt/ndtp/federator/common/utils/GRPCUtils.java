@@ -23,6 +23,7 @@ import uk.gov.dbt.ndtp.federator.common.service.idp.IdpTokenServiceClientSecretI
 import uk.gov.dbt.ndtp.federator.common.service.idp.IdpTokenServiceMtlsImpl;
 import uk.gov.dbt.ndtp.federator.common.service.idp.IdpTokenServicePrivateJwtImpl;
 import uk.gov.dbt.ndtp.federator.common.service.secret.SecretProvider;
+import uk.gov.dbt.ndtp.federator.common.service.secret.VaultTlsSupport;
 
 public class GRPCUtils {
     public static final String COMMON_CONFIG_PROPERTIES = "common.configuration";
@@ -92,9 +93,18 @@ public class GRPCUtils {
     }
 
     /**
-     * Generate ChannelCredentials with mTLS using client P12 and truststore
+     * Generate ChannelCredentials with mTLS. When {@code vault.tls.enabled=true} the identity
+     * and trust material are read from Vault in memory; otherwise the client P12 / truststore
+     * files are used.
      */
     public static ChannelCredentials generateChannelCredentials() {
+        if (VaultTlsSupport.isVaultTlsEnabled()) {
+            LOGGER.info("Client TLS material sourced from Vault (no keystore files on disk).");
+            return TlsChannelCredentials.newBuilder()
+                    .keyManager(VaultTlsSupport.keyManagers())
+                    .trustManager(VaultTlsSupport.trustManagers())
+                    .build();
+        }
         return TlsChannelCredentials.newBuilder()
                 .keyManager(createKeyManagerFromP12())
                 .trustManager(createTrustManager())

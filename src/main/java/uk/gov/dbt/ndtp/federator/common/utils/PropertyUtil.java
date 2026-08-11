@@ -32,14 +32,18 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.InputStream;
 import java.net.URISyntaxException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Map;
 import java.util.Properties;
+import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import uk.gov.dbt.ndtp.federator.common.service.secret.NoopSecretProvider;
 import uk.gov.dbt.ndtp.federator.common.service.secret.SecretProvider;
+import uk.gov.dbt.ndtp.federator.common.service.secret.VaultAuthConfig;
+import uk.gov.dbt.ndtp.federator.common.service.secret.VaultAuthMethod;
 import uk.gov.dbt.ndtp.federator.common.service.secret.VaultSecretProvider;
 
 /**
@@ -63,8 +67,36 @@ public class PropertyUtil {
     public static final String ENV_VAULT_TOKEN = "VAULT_TOKEN";
     public static final String ENV_VAULT_KEYSTORE_PASSWORD_PATH = "VAULT_KEYSTORE_PASSWORD_PATH";
     public static final String ENV_VAULT_TRUSTSTORE_PASSWORD_PATH = "VAULT_TRUSTSTORE_PASSWORD_PATH";
+
+    /** Selects the Vault authentication method: {@code token} (default) or {@code approle}. */
+    public static final String VAULT_AUTH_METHOD = "vault.auth.method";
+    /** AppRole {@code role_id}, used when {@link #VAULT_AUTH_METHOD} is {@code approle}. */
+    public static final String VAULT_APPROLE_ROLE_ID = "vault.approle.role-id";
+    /** AppRole {@code secret_id}, used when {@link #VAULT_AUTH_METHOD} is {@code approle}. */
+    public static final String VAULT_APPROLE_SECRET_ID = "vault.approle.secret-id";
+    /**
+     * Path to a file containing the AppRole {@code secret_id} (e.g. a mounted Kubernetes
+     * Secret). Used in preference to {@link #VAULT_APPROLE_SECRET_ID} if both are set.
+     */
+    public static final String VAULT_APPROLE_SECRET_ID_PATH = "vault.approle.secret-id-path";
+    /** Vault mount path for the AppRole auth method (default {@code approle}). */
+    public static final String VAULT_APPROLE_MOUNT_PATH = "vault.approle.mount-path";
+    /** Interval, in seconds, between AppRole token renewal attempts (default 300). */
+    public static final String VAULT_APPROLE_RENEWAL_INTERVAL_SECONDS = "vault.approle.renewal-interval-seconds";
+    /** Environment variable holding the AppRole {@code role_id}, takes precedence if set. */
+    public static final String ENV_VAULT_ROLE_ID = "VAULT_ROLE_ID";
+    /** Environment variable holding the AppRole {@code secret_id}, takes precedence if set. */
+    public static final String ENV_VAULT_SECRET_ID = "VAULT_SECRET_ID";
+
     static SecretProvider providerOverrideForTest = null;
     static Map<String, String> testMappingsOverride = null;
+
+    /**
+     * Caches {@link SecretProvider} instances per distinct Vault configuration so that repeated
+     * calls to {@link #createSecretProvider(Properties)} (e.g. once per properties file loaded)
+     * do not each open a new Vault connection / AppRole login / renewal thread.
+     */
+    private static final Map<String, SecretProvider> SECRET_PROVIDER_CACHE = new ConcurrentHashMap<>();
 
     private static final String CLIENT_P12_PASSWORD = "client.p12Password";
     private static final String CLIENT_TRUSTSTORE_PASSWORD = "client.truststorePassword";
@@ -98,25 +130,156 @@ public class PropertyUtil {
         }
 
         SecretProvider secretProvider = (providerOverrideForTest != null)
-                        ? providerOverrideForTest
-                        : createSecretProvider(commonProperties);
+                ? providerOverrideForTest
+                : createSecretProvider(commonProperties);
         overrideWithSecrets(properties, secretProvider);
     }
 
     public static SecretProvider createSecretProvider(Properties properties) {
 
         String vaultUri = properties.getProperty(VAULT_URI);
+
+        if (vaultUri == null || vaultUri.isBlank()) {
+            return new NoopSecretProvider();
+        }
+
+        VaultAuthMethod authMethod;
+        VaultAuthConfig authConfig;
+        try {
+            authMethod = VaultAuthMethod.fromString(properties.getProperty(VAULT_AUTH_METHOD));
+            authConfig = switch (authMethod) {
+                case APPROLE -> buildAppRoleAuthConfig(properties);
+                case TOKEN -> buildTokenAuthConfig();
+            };
+        } catch (Exception e) {
+            LOGGER.error("Invalid Vault authentication configuration", e);
+            return new NoopSecretProvider();
+        }
+
+        if (authConfig == null) {
+            return new NoopSecretProvider();
+        }
+
         String vaultTruststorePath = properties.getProperty(VAULT_TRUSTSTORE_PATH);
         String vaultTruststorePassword = properties.getProperty(VAULT_TRUSTSTORE_PASSWORD);
 
-        // Get token from ENV
+        String cacheKey = buildCacheKey(vaultUri, authConfig, vaultTruststorePath);
+
+        return SECRET_PROVIDER_CACHE.computeIfAbsent(cacheKey, key -> {
+            try {
+                return new VaultSecretProvider(vaultUri, authConfig, vaultTruststorePath, vaultTruststorePassword);
+            } catch (Exception e) {
+                LOGGER.error("Failed to create Vault secret provider for auth method {}", authMethod, e);
+                return new NoopSecretProvider();
+            }
+        });
+    }
+
+    /**
+     * Builds a {@link VaultAuthConfig} for {@link VaultAuthMethod#TOKEN}, reading the token from
+     * the {@value #ENV_VAULT_TOKEN} environment variable.
+     *
+     * @return a token-based {@link VaultAuthConfig}, or {@code null} if {@value #ENV_VAULT_TOKEN} is unset
+     */
+    private static VaultAuthConfig buildTokenAuthConfig() {
         String vaultToken = System.getenv(ENV_VAULT_TOKEN);
+        if (vaultToken == null || vaultToken.isBlank()) {
+            return null;
+        }
+        return VaultAuthConfig.forToken(vaultToken);
+    }
 
-        SecretProvider provider = (vaultUri != null && vaultToken != null)
-                ? new VaultSecretProvider(vaultUri, vaultToken, vaultTruststorePath, vaultTruststorePassword)
-                : new NoopSecretProvider();
+    /**
+     * Builds a {@link VaultAuthConfig} for {@link VaultAuthMethod#APPROLE}. The {@code role_id}
+     * and {@code secret_id} are resolved with the following precedence: environment variables
+     * ({@value #ENV_VAULT_ROLE_ID} / {@value #ENV_VAULT_SECRET_ID}), then
+     * {@value #VAULT_APPROLE_SECRET_ID_PATH} (for the secret_id), then the
+     * {@value #VAULT_APPROLE_ROLE_ID} / {@value #VAULT_APPROLE_SECRET_ID} properties.
+     *
+     * @param properties the loaded application properties
+     * @return an AppRole-based {@link VaultAuthConfig}, or {@code null} if not configured
+     */
+    private static VaultAuthConfig buildAppRoleAuthConfig(Properties properties) {
+        String roleId = firstNonBlank(System.getenv(ENV_VAULT_ROLE_ID), properties.getProperty(VAULT_APPROLE_ROLE_ID));
 
-        return provider;
+        String secretId = firstNonBlank(
+                System.getenv(ENV_VAULT_SECRET_ID),
+                readSecretIdFromFile(properties.getProperty(VAULT_APPROLE_SECRET_ID_PATH)),
+                properties.getProperty(VAULT_APPROLE_SECRET_ID));
+
+        if (roleId == null || roleId.isBlank() || secretId == null || secretId.isBlank()) {
+            LOGGER.warn(
+                    "vault.auth.method is 'approle' but '{}'/'{}' (or equivalent env vars/secret file) are not "
+                            + "configured; Vault secret provider will be disabled",
+                    VAULT_APPROLE_ROLE_ID,
+                    VAULT_APPROLE_SECRET_ID);
+            return null;
+        }
+
+        String mountPath = properties.getProperty(VAULT_APPROLE_MOUNT_PATH, VaultAuthConfig.DEFAULT_APPROLE_MOUNT_PATH);
+        long renewalIntervalSeconds = getLongOrDefault(
+                properties.getProperty(VAULT_APPROLE_RENEWAL_INTERVAL_SECONDS),
+                VaultAuthConfig.DEFAULT_RENEWAL_INTERVAL_SECONDS);
+
+        return VaultAuthConfig.forAppRole(roleId, secretId, mountPath, renewalIntervalSeconds);
+    }
+
+    /**
+     * Reads and trims the contents of the file at {@code path}, supporting a mounted Kubernetes
+     * Secret file for the AppRole {@code secret_id}.
+     *
+     * @param path the file path, may be {@code null} or blank
+     * @return the trimmed file contents, or {@code null} if {@code path} is blank or unreadable
+     */
+    private static String readSecretIdFromFile(String path) {
+        if (path == null || path.isBlank()) {
+            return null;
+        }
+        try {
+            return Files.readString(new File(path).toPath()).trim();
+        } catch (Exception e) {
+            LOGGER.warn("Could not read Vault AppRole secret_id from file '{}': {}", path, e.getMessage());
+            return null;
+        }
+    }
+
+    private static String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private static long getLongOrDefault(String value, long defaultValue) {
+        if (value == null || value.isBlank()) {
+            return defaultValue;
+        }
+        try {
+            return Long.parseLong(value.trim());
+        } catch (NumberFormatException e) {
+            LOGGER.warn("Invalid numeric value '{}', using default {}", value, defaultValue);
+            return defaultValue;
+        }
+    }
+
+    /**
+     * Builds a stable cache key for {@link #SECRET_PROVIDER_CACHE} that uniquely identifies a
+     * Vault connection configuration, without including the raw token/secret_id value itself.
+     */
+    private static String buildCacheKey(String vaultUri, VaultAuthConfig authConfig, String truststorePath) {
+        String authIdentity = authConfig.isAppRole()
+                ? "approle:" + authConfig.getApproleMountPath() + ":" + authConfig.getRoleId()
+                : "token:" + Integer.toHexString(authConfig.getToken().hashCode());
+        return vaultUri + "|" + authIdentity + "|" + truststorePath;
+    }
+
+    /**
+     * Clears the cached {@link SecretProvider} instances. For testing purposes only.
+     */
+    public static void clearSecretProviderCache() {
+        SECRET_PROVIDER_CACHE.clear();
     }
 
     public static boolean initializeProperties() {

@@ -7,6 +7,7 @@ import java.net.http.HttpClient;
 import java.time.Duration;
 import java.util.Properties;
 import javax.net.ssl.SSLContext;
+import uk.gov.dbt.ndtp.federator.common.service.secret.VaultTlsSupport;
 import uk.gov.dbt.ndtp.federator.exceptions.FederatorSslException;
 
 public class HttpClientFactoryUtils {
@@ -19,13 +20,19 @@ public class HttpClientFactoryUtils {
 
     public static HttpClient createHttpClientWithMtls(Properties properties) {
         try {
-            String keystorePath = properties.getProperty("idp.keystore.path");
-            String keystorePassword = properties.getProperty("idp.keystore.password");
-            String truststorePath = properties.getProperty("idp.truststore.path");
-            String truststorePassword = properties.getProperty("idp.truststore.password");
+            SSLContext sslContext;
+            if (VaultTlsSupport.isVaultTlsEnabled()) {
+                // IDP mTLS identity/trust sourced from Vault (no keystore files on disk).
+                sslContext = VaultTlsSupport.sslContext();
+            } else {
+                String keystorePath = properties.getProperty("idp.keystore.path");
+                String keystorePassword = properties.getProperty("idp.keystore.password");
+                String truststorePath = properties.getProperty("idp.truststore.path");
+                String truststorePassword = properties.getProperty("idp.truststore.password");
 
-            SSLContext sslContext =
-                    SSLUtils.createSSLContext(keystorePath, keystorePassword, truststorePath, truststorePassword);
+                sslContext =
+                        SSLUtils.createSSLContext(keystorePath, keystorePassword, truststorePath, truststorePassword);
+            }
 
             return HttpClient.newBuilder()
                     .sslContext(sslContext)
