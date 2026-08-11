@@ -22,6 +22,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.KeyStore;
 import java.security.MessageDigest;
 import java.security.PrivateKey;
+import java.security.SecureRandom;
 import java.security.cert.Certificate;
 import java.security.cert.X509Certificate;
 import java.security.interfaces.ECPrivateKey;
@@ -31,6 +32,10 @@ import java.util.*;
 import java.util.function.Supplier;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
+import uk.gov.dbt.ndtp.federator.common.service.secret.SecretProvider;
+import uk.gov.dbt.ndtp.federator.common.service.secret.VaultKeystoreProvider;
+import uk.gov.dbt.ndtp.federator.common.service.secret.VaultTlsSupport;
+import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
 import uk.gov.dbt.ndtp.federator.common.utils.RedisUtil;
 import uk.gov.dbt.ndtp.federator.exceptions.FederatorTokenException;
 
@@ -262,6 +267,12 @@ public class IdpTokenServicePrivateJwtImpl extends AbstractIdpTokenService {
      * us both artefacts.</p>
      */
     static KeystoreContents loadKeystoreContents(Properties props) {
+        // When vault.tls.enabled=true the private_key_jwt signing key + certificate are read
+        // directly from Vault (no keystore file on disk — the Azure SMB file share was removed).
+        if (Boolean.parseBoolean(props.getProperty(VaultTlsSupport.VAULT_TLS_ENABLED, "false"))) {
+            return loadKeystoreContentsFromVault(props);
+        }
+
         String keystorePath     = props.getProperty("idp.keystore.path");
         String keystorePassword = props.getProperty("idp.keystore.password");
         String alias            = props.getProperty("idp.jwt.key.alias");
@@ -306,6 +317,41 @@ public class IdpTokenServicePrivateJwtImpl extends AbstractIdpTokenService {
         } catch (Exception e) {
             throw new FederatorTokenException(
                     "Failed to load keystore from: " + keystorePath, e);
+        }
+    }
+
+    /**
+     * Loads the private_key_jwt signing key and leaf certificate directly from Vault (no keystore
+     * file on disk). The certificate manager publishes the CA-signed leaf + key pair to Vault; the
+     * {@code kid} derived here is the RFC 7638 SHA-256 thumbprint, matching the JWKS the management
+     * node serves for this client.
+     */
+    static KeystoreContents loadKeystoreContentsFromVault(Properties props) {
+        String basePath = props.getProperty(
+                VaultTlsSupport.VAULT_TLS_SECRET_BASE_PATH, VaultTlsSupport.DEFAULT_SECRET_BASE_PATH);
+        String alias = props.getProperty(
+                VaultTlsSupport.VAULT_TLS_KEYSTORE_ALIAS, VaultTlsSupport.DEFAULT_KEYSTORE_ALIAS);
+        try {
+            SecretProvider provider = PropertyUtil.createSecretProvider(props);
+            byte[] pwBytes = new byte[24];
+            new SecureRandom().nextBytes(pwBytes);
+            char[] password = Base64.getEncoder().encodeToString(pwBytes).toCharArray();
+
+            KeyStore ks = VaultKeystoreProvider.buildIdentityKeyStore(provider, basePath, alias, password);
+            PrivateKey privateKey = (PrivateKey) ks.getKey(alias, password);
+            if (privateKey == null) {
+                throw new FederatorTokenException("No private key for alias '" + alias + "' in Vault material");
+            }
+            X509Certificate leafCert = (X509Certificate) ks.getCertificateChain(alias)[0];
+            String kid = deriveKidFromCertificate(leafCert);
+            log.info(
+                    "private_key_jwt signing material loaded from Vault (base '{}', alias '{}'). Subject: {}, kid: {}",
+                    basePath, alias, leafCert.getSubjectX500Principal().getName(), kid);
+            return new KeystoreContents(privateKey, kid);
+        } catch (FederatorTokenException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new FederatorTokenException("Failed to load private_key_jwt material from Vault", e);
         }
     }
 
