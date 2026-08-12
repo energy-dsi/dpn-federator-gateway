@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
+import javax.net.ssl.KeyManager;
 import lombok.extern.slf4j.Slf4j;
 import org.jobrunr.configuration.JobRunr;
 import org.jobrunr.jobs.RecurringJob;
@@ -20,6 +21,7 @@ import uk.gov.dbt.ndtp.federator.client.jobs.params.JobParams;
 import uk.gov.dbt.ndtp.federator.client.jobs.params.RecurrentJobRequest;
 import uk.gov.dbt.ndtp.federator.client.lifecycle.ShutdownThread;
 import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
+import uk.gov.dbt.ndtp.federator.common.utils.SSLUtils;
 
 /**
  * Singleton provider to configure and manage the lifecycle of JobRunr background job scheduler.
@@ -37,6 +39,16 @@ import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
  *   <li>jobs.dashboard.enabled = true</li>
  *   <li>jobs.background.enabled = true</li>
  *   <li>jobs.storage.provider = memory</li>
+ *   <li>jobs.dashboard.https.enabled = false - fronts jobs.dashboard.port with HTTPS via
+ *       {@link HttpsDashboardProxy} (JobRunr's own dashboard has no TLS support). When enabled,
+ *       jobs.dashboard.port must be treated as internal-only and jobs.dashboard.https.port is the
+ *       one actually exposed. Note: JobRunr's OSS dashboard still binds jobs.dashboard.port on
+ *       0.0.0.0 (no bind-address option), so "internal-only" must be enforced at the network layer
+ *       (firewall / do not expose the port / NetworkPolicy) - the proxy's TLS is bypassable
+ *       otherwise.</li>
+ *   <li>jobs.dashboard.https.port = 8443</li>
+ *   <li>jobs.dashboard.https.p12FilePath - required when https enabled</li>
+ *   <li>jobs.dashboard.https.p12Password - required when https enabled</li>
  * </ul>
  * Currently only the in-memory storage provider is supported without additional dependencies.
  * </p>
@@ -51,12 +63,19 @@ public final class DefaultJobSchedulerProvider implements JobSchedulerProvider {
     private static final String PROP_DASHBOARD_PORT = "jobs.dashboard.port";
     private static final String PROP_BACKGROUND_ENABLED = "jobs.background.enabled";
     private static final String PROP_STORAGE_PROVIDER = "jobs.storage.provider"; // memory (default), future: redis, sql
+    // JobRunr's dashboard has no TLS support of its own (see HttpsDashboardProxy), so when enabled
+    // jobs.dashboard.port becomes an internal-only port and this proxy fronts it with HTTPS.
+    private static final String PROP_DASHBOARD_HTTPS_ENABLED = "jobs.dashboard.https.enabled";
+    private static final String PROP_DASHBOARD_HTTPS_PORT = "jobs.dashboard.https.port";
+    private static final String PROP_DASHBOARD_HTTPS_CERT_FILE_PATH = "jobs.dashboard.https.certFilePath";
+    private static final String PROP_DASHBOARD_HTTPS_KEY_FILE_PATH = "jobs.dashboard.https.keyFilePath";
     private final Object lifecycleLock = new Object();
     private boolean started = false;
     // Keep reference so we can close when stopping (for in-memory case)
     private AbstractStorageProvider storageProvider;
     private JobScheduler jobScheduler;
     private RecurringJobsAccess recurringJobsAccess;
+    private HttpsDashboardProxy httpsDashboardProxy;
 
     public DefaultJobSchedulerProvider() {
         // public constructor; instantiate and call ensureStarted() when needed
@@ -124,17 +143,36 @@ public final class DefaultJobSchedulerProvider implements JobSchedulerProvider {
                 cfg = cfg.useBackgroundJobServer();
             }
             if (dashboardEnabled) {
+                // SECURITY: JobRunr's OSS dashboard server binds 0.0.0.0 (its configuration API
+                // exposes only a port, no bind address), so dashboardPort is reachable on every
+                // interface. When HTTPS is enabled, HttpsDashboardProxy fronts this plaintext port
+                // with TLS - but that TLS is only meaningful if the plaintext port is unreachable
+                // from outside the host. This is a DEPLOYMENT responsibility that code cannot
+                // enforce: in Kubernetes do not list dashboardPort in the Service/container ports
+                // (and add a NetworkPolicy); on a bare VM, firewall it. Do NOT expose dashboardPort.
                 cfg = cfg.useDashboard(dashboardPort);
             }
             jobScheduler = cfg.initialize().getJobScheduler();
 
+            boolean dashboardHttpsEnabled = dashboardEnabled
+                    && PropertyUtil.getPropertyBooleanValue(PROP_DASHBOARD_HTTPS_ENABLED, "false");
+            if (dashboardHttpsEnabled) {
+                int httpsPort = PropertyUtil.getPropertyIntValue(PROP_DASHBOARD_HTTPS_PORT, "8443");
+                String certFilePath = PropertyUtil.getPropertyValue(PROP_DASHBOARD_HTTPS_CERT_FILE_PATH);
+                String keyFilePath = PropertyUtil.getPropertyValue(PROP_DASHBOARD_HTTPS_KEY_FILE_PATH);
+                KeyManager[] keyManagers = SSLUtils.createKeyManagerFromPem(certFilePath, keyFilePath);
+                httpsDashboardProxy = new HttpsDashboardProxy(httpsPort, dashboardPort, keyManagers);
+                httpsDashboardProxy.start();
+            }
+
             started = true;
 
             log.info(
-                    "JobRunr initialised (storage={}, background={}, dashboard={})",
+                    "JobRunr initialised (storage={}, background={}, dashboard={}, dashboardHttps={})",
                     CONSTANT_PROVIDER_TYPE_MEMORY,
                     backgroundEnabled,
-                    dashboardEnabled);
+                    dashboardEnabled,
+                    dashboardHttpsEnabled);
 
             // Register a shutdown task
             ShutdownThread.register(() -> {
@@ -145,6 +183,13 @@ public final class DefaultJobSchedulerProvider implements JobSchedulerProvider {
     }
 
     private void shutdown() {
+        try {
+            if (httpsDashboardProxy != null) {
+                httpsDashboardProxy.stop();
+            }
+        } catch (Exception e) {
+            log.debug("Ignoring exception while stopping HTTPS dashboard proxy", e);
+        }
         try {
             JobRunr.destroy();
         } catch (Exception e) {
