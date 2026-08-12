@@ -4,7 +4,7 @@
 // In-house replacement for
 // uk.gov.dbt.ndtp.secure.agent.sources.kafka.serializers.RdfPayloadDeserializer.
 
-package uk.gov.dbt.ndtp.federator.eventsource.kafka.serializers;
+package uk.gov.dbt.ndtp.secure.agent.sources.kafka.serializers;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
@@ -12,8 +12,8 @@ import org.apache.commons.lang3.StringUtils;
 import org.apache.jena.riot.Lang;
 import org.apache.kafka.common.header.Headers;
 import org.apache.kafka.common.serialization.Deserializer;
-import uk.gov.dbt.ndtp.federator.eventsource.IANodeHeaders;
-import uk.gov.dbt.ndtp.federator.eventsource.payloads.RdfPayload;
+import uk.gov.dbt.ndtp.secure.agent.sources.IANodeHeaders;
+import uk.gov.dbt.ndtp.secure.agent.sources.payloads.RdfPayload;
 
 public class RdfPayloadDeserializer implements Deserializer<RdfPayload> {
 

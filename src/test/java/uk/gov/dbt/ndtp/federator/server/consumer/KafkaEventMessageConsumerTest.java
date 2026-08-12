@@ -43,8 +43,8 @@ import org.mockito.Mockito;
 import uk.gov.dbt.ndtp.federator.common.utils.KafkaUtil;
 import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
 import uk.gov.dbt.ndtp.federator.common.utils.TestPropertyUtil;
-import uk.gov.dbt.ndtp.federator.eventsource.kafka.KafkaEvent;
-import uk.gov.dbt.ndtp.federator.eventsource.kafka.KafkaEventSource;
+import uk.gov.dbt.ndtp.secure.agent.sources.kafka.KafkaEvent;
+import uk.gov.dbt.ndtp.secure.agent.sources.kafka.KafkaEventSource;
 
 class KafkaEventMessageConsumerTest {
 

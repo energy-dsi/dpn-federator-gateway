@@ -5,7 +5,7 @@
 // Only the subset of methods actually used across dpn-federator-gateway is included;
 // extend as needed if other call sites surface during migration.
 
-package uk.gov.dbt.ndtp.federator.eventsource;
+package uk.gov.dbt.ndtp.secure.agent.sources;
 
 import java.util.stream.Stream;
 

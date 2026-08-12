@@ -48,9 +48,9 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
-import uk.gov.dbt.ndtp.federator.eventsource.kafka.KafkaEventSource;
-import uk.gov.dbt.ndtp.federator.eventsource.kafka.policies.KafkaReadPolicy;
-import uk.gov.dbt.ndtp.federator.eventsource.kafka.sinks.KafkaSink;
+import uk.gov.dbt.ndtp.secure.agent.sources.kafka.KafkaEventSource;
+import uk.gov.dbt.ndtp.secure.agent.sources.kafka.policies.KafkaReadPolicy;
+import uk.gov.dbt.ndtp.secure.agent.sources.kafka.sinks.KafkaSink;
 
 class KafkaUtilTest {
     @BeforeEach

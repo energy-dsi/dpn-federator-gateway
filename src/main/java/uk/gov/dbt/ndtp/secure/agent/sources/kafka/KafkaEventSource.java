@@ -8,7 +8,7 @@
 // If a genuine need for background pre-fetch surfaces later, add it here without touching
 // callers - the public surface (poll/isClosed/close + Builder) is unchanged.
 
-package uk.gov.dbt.ndtp.federator.eventsource.kafka;
+package uk.gov.dbt.ndtp.secure.agent.sources.kafka;
 
 import java.time.Duration;
 import java.util.ArrayDeque;
@@ -28,10 +28,10 @@ import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import uk.gov.dbt.ndtp.federator.eventsource.Event;
-import uk.gov.dbt.ndtp.federator.eventsource.EventSource;
-import uk.gov.dbt.ndtp.federator.eventsource.kafka.policies.KafkaReadPolicies;
-import uk.gov.dbt.ndtp.federator.eventsource.kafka.policies.KafkaReadPolicy;
+import uk.gov.dbt.ndtp.secure.agent.sources.Event;
+import uk.gov.dbt.ndtp.secure.agent.sources.EventSource;
+import uk.gov.dbt.ndtp.secure.agent.sources.kafka.policies.KafkaReadPolicies;
+import uk.gov.dbt.ndtp.secure.agent.sources.kafka.policies.KafkaReadPolicy;
 
 /**
  * An {@link EventSource} backed by a single-topic {@link KafkaConsumer}.

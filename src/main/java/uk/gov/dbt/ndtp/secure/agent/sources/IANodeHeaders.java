@@ -5,7 +5,7 @@
 // Pure constants - verified byte-for-byte identical to the original via decompilation,
 // so wire compatibility with any peer still on secure-agents is unaffected.
 
-package uk.gov.dbt.ndtp.federator.eventsource;
+package uk.gov.dbt.ndtp.secure.agent.sources;
 
 public final class IANodeHeaders {
 

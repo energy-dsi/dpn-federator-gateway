@@ -6,7 +6,7 @@
 // actually uses it today (send() then move on) - the original's async/Callback path and
 // producerErrors bookkeeping were not exercised anywhere in this codebase.
 
-package uk.gov.dbt.ndtp.federator.eventsource.kafka.sinks;
+package uk.gov.dbt.ndtp.secure.agent.sources.kafka.sinks;
 
 import java.nio.charset.StandardCharsets;
 import java.util.List;
@@ -24,9 +24,10 @@ import org.apache.kafka.common.header.internals.RecordHeader;
 import org.apache.kafka.common.header.internals.RecordHeaders;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import uk.gov.dbt.ndtp.secure.agent.sources.Event;
 
 /**
- * A sink that publishes {@link uk.gov.dbt.ndtp.federator.eventsource.Event}s to a single
+ * A sink that publishes {@link uk.gov.dbt.ndtp.secure.agent.sources.Event}s to a single
  * Kafka topic via a {@link KafkaProducer}.
  *
  * @param <Key>   record key type
@@ -44,7 +45,7 @@ public class KafkaSink<Key, Value> implements AutoCloseable {
         this.producer = new KafkaProducer<>(props);
     }
 
-    public void send(uk.gov.dbt.ndtp.federator.eventsource.Event<Key, Value> event) {
+    public void send(Event<Key, Value> event) {
         Objects.requireNonNull(event, "Event cannot be null");
         ProducerRecord<Key, Value> record =
                 new ProducerRecord<>(topic, null, event.key(), event.value(), toKafkaHeaders(event));
@@ -58,7 +59,7 @@ public class KafkaSink<Key, Value> implements AutoCloseable {
         }
     }
 
-    private List<Header> toKafkaHeaders(uk.gov.dbt.ndtp.federator.eventsource.Event<Key, Value> event) {
+    private List<Header> toKafkaHeaders(uk.gov.dbt.ndtp.secure.agent.sources.Event<Key, Value> event) {
         return event.headers()
                 .map(h -> (Header) new RecordHeader(h.key(), h.value().getBytes(StandardCharsets.UTF_8)))
                 .toList();

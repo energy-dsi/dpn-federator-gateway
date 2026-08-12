@@ -32,8 +32,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import uk.gov.dbt.ndtp.federator.common.utils.KafkaUtil;
 import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
-import uk.gov.dbt.ndtp.federator.eventsource.kafka.KafkaEvent;
-import uk.gov.dbt.ndtp.federator.eventsource.kafka.KafkaEventSource;
+import uk.gov.dbt.ndtp.secure.agent.sources.kafka.KafkaEvent;
+import uk.gov.dbt.ndtp.secure.agent.sources.kafka.KafkaEventSource;
 
 public class KafkaEventMessageConsumer<K, V> implements MessageConsumer<KafkaEvent<K, V>> {
 

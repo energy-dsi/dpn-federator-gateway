@@ -4,7 +4,7 @@
 // In-house replacement for
 // uk.gov.dbt.ndtp.secure.agent.sources.kafka.serializers.AbstractJacksonDeserializer.
 
-package uk.gov.dbt.ndtp.federator.eventsource.kafka.serializers;
+package uk.gov.dbt.ndtp.secure.agent.sources.kafka.serializers;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;

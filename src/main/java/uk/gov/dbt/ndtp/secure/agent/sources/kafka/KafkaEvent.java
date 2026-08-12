@@ -3,15 +3,15 @@
 //
 // In-house replacement for uk.gov.dbt.ndtp.secure.agent.sources.kafka.KafkaEvent.
 
-package uk.gov.dbt.ndtp.federator.eventsource.kafka;
+package uk.gov.dbt.ndtp.secure.agent.sources.kafka;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Objects;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
-import uk.gov.dbt.ndtp.federator.eventsource.Event;
-import uk.gov.dbt.ndtp.federator.eventsource.Header;
+import uk.gov.dbt.ndtp.secure.agent.sources.Event;
+import uk.gov.dbt.ndtp.secure.agent.sources.Header;
 
 /**
  * An {@link Event} backed directly by a Kafka {@link ConsumerRecord}.

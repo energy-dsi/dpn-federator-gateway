@@ -5,7 +5,7 @@
 // Simplified to the one thing dpn-federator-gateway actually needs: deciding where newly
 // assigned partitions should start reading from.
 
-package uk.gov.dbt.ndtp.federator.eventsource.kafka.policies;
+package uk.gov.dbt.ndtp.secure.agent.sources.kafka.policies;
 
 import java.util.Collection;
 import org.apache.kafka.clients.consumer.Consumer;

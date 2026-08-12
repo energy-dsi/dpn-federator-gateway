@@ -3,7 +3,7 @@
 //
 // In-house replacement for uk.gov.dbt.ndtp.secure.agent.sources.EventSource.
 
-package uk.gov.dbt.ndtp.federator.eventsource;
+package uk.gov.dbt.ndtp.secure.agent.sources;
 
 import java.time.Duration;
 

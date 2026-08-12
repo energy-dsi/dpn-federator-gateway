@@ -15,6 +15,7 @@ import java.util.Properties;
 import javax.net.ssl.SSLContext;
 import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
+import uk.gov.dbt.ndtp.federator.common.service.secret.VaultTlsSupport;
 import uk.gov.dbt.ndtp.federator.exceptions.FederatorSslException;
 
 class HttpClientFactoryUtilsTest {
@@ -27,7 +28,12 @@ class HttpClientFactoryUtilsTest {
         props.setProperty("idp.truststore.path", "ts");
         props.setProperty("idp.truststore.password", "tsp");
 
-        try (MockedStatic<SSLUtils> sslUtilsMock = mockStatic(SSLUtils.class)) {
+        // createHttpClientWithMtls() checks VaultTlsSupport.isVaultTlsEnabled() first (defaults to
+        // true when no common-config is loaded), which would otherwise route this test through the
+        // Vault-backed keystore path instead of the file-based SSLUtils path being exercised here.
+        try (MockedStatic<SSLUtils> sslUtilsMock = mockStatic(SSLUtils.class);
+                MockedStatic<VaultTlsSupport> vaultMock = mockStatic(VaultTlsSupport.class)) {
+            vaultMock.when(VaultTlsSupport::isVaultTlsEnabled).thenReturn(false);
             sslUtilsMock
                     .when(() -> SSLUtils.createSSLContext(anyString(), anyString(), anyString(), anyString()))
                     .thenReturn(SSLContext.getDefault());

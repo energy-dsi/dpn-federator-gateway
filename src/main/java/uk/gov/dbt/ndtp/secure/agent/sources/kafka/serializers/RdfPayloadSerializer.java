@@ -4,7 +4,7 @@
 // In-house replacement for
 // uk.gov.dbt.ndtp.secure.agent.sources.kafka.serializers.RdfPayloadSerializer.
 
-package uk.gov.dbt.ndtp.federator.eventsource.kafka.serializers;
+package uk.gov.dbt.ndtp.secure.agent.sources.kafka.serializers;
 
 import java.io.ByteArrayOutputStream;
 import org.apache.jena.rdfpatch.RDFPatch;
@@ -14,9 +14,9 @@ import org.apache.jena.riot.RDFDataMgr;
 import org.apache.kafka.common.errors.SerializationException;
 import org.apache.kafka.common.header.Headers;
 import org.apache.kafka.common.serialization.Serializer;
-import uk.gov.dbt.ndtp.federator.eventsource.IANodeHeaders;
-import uk.gov.dbt.ndtp.federator.eventsource.payloads.RdfPayload;
-import uk.gov.dbt.ndtp.federator.eventsource.payloads.RdfPayloadException;
+import uk.gov.dbt.ndtp.secure.agent.sources.IANodeHeaders;
+import uk.gov.dbt.ndtp.secure.agent.sources.payloads.RdfPayload;
+import uk.gov.dbt.ndtp.secure.agent.sources.payloads.RdfPayloadException;
 
 public class RdfPayloadSerializer implements Serializer<RdfPayload> {
 

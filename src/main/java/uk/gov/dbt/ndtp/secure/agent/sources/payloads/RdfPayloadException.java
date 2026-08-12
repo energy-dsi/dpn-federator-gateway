@@ -3,7 +3,7 @@
 //
 // In-house replacement for uk.gov.dbt.ndtp.secure.agent.payloads.RdfPayloadException.
 
-package uk.gov.dbt.ndtp.federator.eventsource.payloads;
+package uk.gov.dbt.ndtp.secure.agent.sources.payloads;
 
 public class RdfPayloadException extends RuntimeException {
 

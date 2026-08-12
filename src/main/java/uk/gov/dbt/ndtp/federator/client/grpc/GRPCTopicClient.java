@@ -56,19 +56,14 @@ import uk.gov.dbt.ndtp.federator.exceptions.ClientGRPCJobException;
 import uk.gov.dbt.ndtp.federator.exceptions.RetryableException;
 import uk.gov.dbt.ndtp.grpc.KafkaByteBatch;
 import uk.gov.dbt.ndtp.grpc.TopicRequest;
-import uk.gov.dbt.ndtp.federator.eventsource.Event;
-import uk.gov.dbt.ndtp.federator.eventsource.Header;
-import uk.gov.dbt.ndtp.federator.eventsource.kafka.sinks.KafkaSink;
-import uk.gov.dbt.ndtp.federator.eventsource.memory.SimpleEvent;
+import uk.gov.dbt.ndtp.secure.agent.sources.Event;
+import uk.gov.dbt.ndtp.secure.agent.sources.Header;
+import uk.gov.dbt.ndtp.secure.agent.sources.kafka.sinks.KafkaSink;
+import uk.gov.dbt.ndtp.secure.agent.sources.memory.SimpleEvent;
 import uk.gov.dbt.ndtp.federator.common.utils.SecurityLabelUtil;
 import uk.gov.dbt.ndtp.federator.common.utils.ObjectMapperUtil;
 import java.util.Map;
 import java.util.Objects;
-import io.grpc.Status.Code.*;
-
-import static io.grpc.Status.*;
-import static io.grpc.Status.Code.UNAVAILABLE;
-import static io.grpc.Status.DEADLINE_EXCEEDED;
 
 
 /**

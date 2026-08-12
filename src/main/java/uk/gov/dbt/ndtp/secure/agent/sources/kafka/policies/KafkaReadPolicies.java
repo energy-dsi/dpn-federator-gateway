@@ -5,7 +5,7 @@
 // Covers the two factory methods dpn-federator-gateway actually calls
 // (fromBeginning() and fromOffsets(null, offset)); add more as needed.
 
-package uk.gov.dbt.ndtp.federator.eventsource.kafka.policies;
+package uk.gov.dbt.ndtp.secure.agent.sources.kafka.policies;
 
 import java.util.Map;
 import org.apache.kafka.common.TopicPartition;

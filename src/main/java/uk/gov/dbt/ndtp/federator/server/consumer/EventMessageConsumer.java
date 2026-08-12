@@ -27,8 +27,8 @@
 package uk.gov.dbt.ndtp.federator.server.consumer;
 
 import java.time.Duration;
-import uk.gov.dbt.ndtp.federator.eventsource.Event;
-import uk.gov.dbt.ndtp.federator.eventsource.EventSource;
+import uk.gov.dbt.ndtp.secure.agent.sources.Event;
+import uk.gov.dbt.ndtp.secure.agent.sources.EventSource;
 
 public class EventMessageConsumer<K, V> implements MessageConsumer<Event<K, V>> {
 

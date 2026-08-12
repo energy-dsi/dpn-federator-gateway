@@ -5,7 +5,7 @@
 // (formerly supplied transitively via uk.gov.dbt.ndtp.secure-agents:event-source-kafka).
 // API is a 1:1 match to the original record so callers only need an import-path change.
 
-package uk.gov.dbt.ndtp.federator.eventsource;
+package uk.gov.dbt.ndtp.secure.agent.sources;
 
 /**
  * A simple key/value header carried alongside an {@link Event}.

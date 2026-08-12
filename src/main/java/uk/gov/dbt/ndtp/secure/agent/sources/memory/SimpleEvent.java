@@ -3,15 +3,15 @@
 //
 // In-house replacement for uk.gov.dbt.ndtp.secure.agent.sources.memory.SimpleEvent.
 
-package uk.gov.dbt.ndtp.federator.eventsource.memory;
+package uk.gov.dbt.ndtp.secure.agent.sources.memory;
 
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.stream.Stream;
-import uk.gov.dbt.ndtp.federator.eventsource.Event;
-import uk.gov.dbt.ndtp.federator.eventsource.Header;
+import uk.gov.dbt.ndtp.secure.agent.sources.Event;
+import uk.gov.dbt.ndtp.secure.agent.sources.Header;
 
 /**
  * A plain in-memory {@link Event}, not backed by any external source.
