@@ -25,11 +25,22 @@
  */
 package uk.gov.dbt.ndtp.federator.common.utils;
 
+import java.io.ByteArrayInputStream;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.security.GeneralSecurityException;
+import java.security.KeyFactory;
 import java.security.KeyStore;
+import java.security.PrivateKey;
+import java.security.cert.Certificate;
+import java.security.cert.CertificateFactory;
+import java.security.spec.PKCS8EncodedKeySpec;
+import java.util.Base64;
+import java.util.Collection;
 import javax.net.ssl.KeyManager;
 import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
@@ -90,6 +101,62 @@ public class SSLUtils {
         } catch (IOException | GeneralSecurityException e) {
             throw new FederatorSslException("Failed to load client P12 keystore.", e);
         }
+    }
+
+    /**
+     * Creates KeyManagers from a PEM certificate file and a PEM private-key file.
+     * <p>
+     * The certificate file may contain the leaf certificate alone or the leaf followed by its
+     * CA chain (multiple {@code CERTIFICATE} blocks). The key file must be an unencrypted PKCS#8
+     * private key ({@code -----BEGIN PRIVATE KEY-----}). The material is assembled into an
+     * in-memory PKCS12 keystore; nothing is written to disk.
+     *
+     * @param certFilePath path to the PEM certificate (chain) file
+     * @param keyFilePath  path to the PEM PKCS#8 private-key file
+     * @return an array of KeyManagers
+     * @throws FederatorSslException if either file is missing or cannot be parsed
+     */
+    public static KeyManager[] createKeyManagerFromPem(String certFilePath, String keyFilePath) {
+        try {
+            String certPem = Files.readString(Path.of(certFilePath), StandardCharsets.UTF_8);
+            String keyPem = Files.readString(Path.of(keyFilePath), StandardCharsets.UTF_8);
+
+            CertificateFactory cf = CertificateFactory.getInstance("X.509");
+            Collection<? extends Certificate> parsed =
+                    cf.generateCertificates(new ByteArrayInputStream(certPem.getBytes(StandardCharsets.UTF_8)));
+            if (parsed.isEmpty()) {
+                throw new FederatorSslException("No certificates found in PEM file: " + certFilePath);
+            }
+            Certificate[] chain = parsed.toArray(new Certificate[0]);
+
+            PrivateKey privateKey = parsePkcs8PrivateKey(keyPem);
+
+            // In-memory-only password: the keystore is never persisted, so this only guards the
+            // transient PKCS12 entry within this JVM.
+            char[] password = "in-memory".toCharArray();
+            KeyStore keyStore = KeyStore.getInstance(KEYSTORE_TYPE_PKCS12);
+            keyStore.load(null, null);
+            keyStore.setKeyEntry("dashboard", privateKey, password, chain);
+
+            KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
+            kmf.init(keyStore, password);
+            log.info("Built KeyManagers from PEM cert '{}' (chain length {})", certFilePath, chain.length);
+            return kmf.getKeyManagers();
+        } catch (FederatorSslException e) {
+            throw e;
+        } catch (IOException | GeneralSecurityException e) {
+            throw new FederatorSslException(
+                    "Failed to build KeyManagers from PEM cert '" + certFilePath + "' / key '" + keyFilePath + "'", e);
+        }
+    }
+
+    private static PrivateKey parsePkcs8PrivateKey(String pem) throws GeneralSecurityException {
+        String base64 = pem.replaceAll("-----BEGIN (?:RSA )?PRIVATE KEY-----", "")
+                .replaceAll("-----END (?:RSA )?PRIVATE KEY-----", "")
+                .replaceAll("\\s", "");
+        byte[] der = Base64.getDecoder().decode(base64);
+        PKCS8EncodedKeySpec spec = new PKCS8EncodedKeySpec(der);
+        return KeyFactory.getInstance("RSA").generatePrivate(spec);
     }
 
     /**
