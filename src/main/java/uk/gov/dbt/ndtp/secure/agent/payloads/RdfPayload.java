@@ -6,7 +6,7 @@
 // bundled .class file - see MIGRATION.md). Wire format (NQuads / RDF-Patch / RDF-Patch-Thrift)
 // is unchanged so this stays interoperable with any peer still on secure-agents.
 
-package uk.gov.dbt.ndtp.secure.agent.sources.payloads;
+package uk.gov.dbt.ndtp.secure.agent.payloads;
 
 import java.io.ByteArrayInputStream;
 import java.util.Objects;

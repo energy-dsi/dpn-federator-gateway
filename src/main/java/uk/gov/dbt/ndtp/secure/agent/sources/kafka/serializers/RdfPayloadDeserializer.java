@@ -13,7 +13,7 @@ import org.apache.jena.riot.Lang;
 import org.apache.kafka.common.header.Headers;
 import org.apache.kafka.common.serialization.Deserializer;
 import uk.gov.dbt.ndtp.secure.agent.sources.IANodeHeaders;
-import uk.gov.dbt.ndtp.secure.agent.sources.payloads.RdfPayload;
+import uk.gov.dbt.ndtp.secure.agent.payloads.RdfPayload;
 
 public class RdfPayloadDeserializer implements Deserializer<RdfPayload> {
 

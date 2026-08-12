@@ -15,8 +15,8 @@ import org.apache.kafka.common.errors.SerializationException;
 import org.apache.kafka.common.header.Headers;
 import org.apache.kafka.common.serialization.Serializer;
 import uk.gov.dbt.ndtp.secure.agent.sources.IANodeHeaders;
-import uk.gov.dbt.ndtp.secure.agent.sources.payloads.RdfPayload;
-import uk.gov.dbt.ndtp.secure.agent.sources.payloads.RdfPayloadException;
+import uk.gov.dbt.ndtp.secure.agent.payloads.RdfPayload;
+import uk.gov.dbt.ndtp.secure.agent.payloads.RdfPayloadException;
 
 public class RdfPayloadSerializer implements Serializer<RdfPayload> {
 
