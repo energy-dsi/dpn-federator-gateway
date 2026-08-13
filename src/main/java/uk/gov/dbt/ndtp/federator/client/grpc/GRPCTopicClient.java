@@ -64,11 +64,6 @@ import uk.gov.dbt.ndtp.federator.common.utils.SecurityLabelUtil;
 import uk.gov.dbt.ndtp.federator.common.utils.ObjectMapperUtil;
 import java.util.Map;
 import java.util.Objects;
-import io.grpc.Status.Code.*;
-
-import static io.grpc.Status.*;
-import static io.grpc.Status.Code.UNAVAILABLE;
-import static io.grpc.Status.DEADLINE_EXCEEDED;
 
 
 /**

@@ -142,7 +142,7 @@ class RdfMessageConductorTest {
     void test_processMessages_happyPath_filteredOutMessage() throws LabelException {
         // given
         KafkaEvent<String, RdfPayload> message =
-                new KafkaEvent<>(new ConsumerRecord<>("topic", 1, 1, "key", null), null);
+                new KafkaEvent<>(new ConsumerRecord<>("topic", 1, 1, "key", null));
         when(mockEventSource.isClosed()).thenReturn(false).thenReturn(true);
         when(mockEventSource.poll(any())).thenReturn(message);
         // Set a filter that will not match the message (e.g., header "foo" = "bar")

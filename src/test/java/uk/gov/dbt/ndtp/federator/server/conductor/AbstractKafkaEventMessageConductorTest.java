@@ -55,7 +55,7 @@ class AbstractKafkaEventMessageConductorTest {
         });
         ConsumerRecord<String, String> consumerRecord = new ConsumerRecord<>(
                 "topic", 1, 1L, 1L, NO_TIMESTAMP_TYPE, 0, 0, "key", null, headers, Optional.empty());
-        return new KafkaEvent<>(consumerRecord, null);
+        return new KafkaEvent<>(consumerRecord);
     }
 
     private AttributesDTO attr(String name, String value) {

@@ -95,7 +95,7 @@ class KafkaEventMessageConsumerTest {
     void test_getNextMessage() {
         // given
         ConsumerRecord<String, String> consumerRecord = new ConsumerRecord<>(TOPIC, 0, OFFSET, null, null);
-        KafkaEvent<String, String> kafkaEvent = new KafkaEvent<>(consumerRecord, mockEventSource);
+        KafkaEvent<String, String> kafkaEvent = new KafkaEvent<>(consumerRecord);
         when(mockEventSource.poll(any(Duration.class))).thenReturn(kafkaEvent);
         MessageConsumer<KafkaEvent<String, String>> consumer = getConsumer();
         // when

@@ -221,8 +221,18 @@ class GRPCUtilsTest {
     }
 
     @Test
-    void testGenerateChannelCredentials() {
-        PropertyUtil.init("test.properties");
+    void testGenerateChannelCredentials() throws Exception {
+        // generateChannelCredentials() checks VaultTlsSupport.isVaultTlsEnabled() first (defaults to
+        // true when unset), which would otherwise route this test through the Vault-backed keystore
+        // path instead of the file-based SSLUtils path being exercised here. Disable it explicitly via
+        // a common-config file so the legacy P12/truststore path (mocked below) is used.
+        // NOTE: writeCommonConfig() calls PropertyUtil.init(...) internally, which replaces the
+        // PropertyUtil instance - so it must run BEFORE the client.* properties are set below,
+        // otherwise this call would wipe them out.
+        Properties vaultDisabled = new Properties();
+        vaultDisabled.setProperty("vault.tls.enabled", "false");
+        writeCommonConfig("common_vault_disabled.properties", vaultDisabled);
+
         PropertyUtil.getInstance().properties.setProperty("client.p12FilePath", "nonexistent.p12");
         PropertyUtil.getInstance().properties.setProperty("client.p12Password", "pass");
         PropertyUtil.getInstance().properties.setProperty("client.truststoreFilePath", "nonexistent.jks");

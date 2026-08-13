@@ -252,7 +252,15 @@ class DefaultJobSchedulerProviderTest {
     @Test
     void ensureStarted_withDashboardAndBackgroundEnabled() {
         try (MockedStatic<PropertyUtil> propMock = mockStatic(PropertyUtil.class)) {
-            propMock.when(() -> PropertyUtil.getPropertyBooleanValue(anyString(), anyString()))
+            // NOTE: stubbing getPropertyBooleanValue(anyString(), anyString()) to always return true
+            // also matches the internal "jobs.dashboard.https.enabled" check, forcing ensureStarted()
+            // down the HTTPS-dashboard branch, which then reads unstubbed cert/key file path
+            // properties (a different overload) as null and NPEs inside SSLUtils.createKeyManagerFromPem.
+            // Scope the "true" stub to just the two properties this test actually means to enable, and
+            // leave "jobs.dashboard.https.enabled" unstubbed so it falls back to its default of false.
+            propMock.when(() -> PropertyUtil.getPropertyBooleanValue(eq("jobs.dashboard.enabled"), anyString()))
+                    .thenReturn(true);
+            propMock.when(() -> PropertyUtil.getPropertyBooleanValue(eq("jobs.background.enabled"), anyString()))
                     .thenReturn(true);
             propMock.when(() -> PropertyUtil.getPropertyValue(anyString(), anyString()))
                     .thenReturn("memory");
