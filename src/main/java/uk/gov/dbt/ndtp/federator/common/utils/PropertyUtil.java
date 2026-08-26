@@ -446,6 +446,7 @@ public class PropertyUtil {
         if (absoluteFile.isFile() && absoluteFile.canRead()) {
             try (FileInputStream fis = new FileInputStream(absoluteFile)) {
                 nestedProperties.load(fis);
+                overrideSystemProperties(nestedProperties);
                 return nestedProperties;
             } catch (Exception e) {
                 LOGGER.warn(
@@ -462,6 +463,7 @@ public class PropertyUtil {
             File resourceFile = getPropertyFileValue(filePathKey);
             try (FileInputStream fis = new FileInputStream(resourceFile)) {
                 nestedProperties.load(fis);
+                overrideSystemProperties(nestedProperties);
                 return nestedProperties;
             }
         } catch (Exception e) {

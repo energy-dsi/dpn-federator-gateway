@@ -31,30 +31,52 @@ public class IdpTokenServiceMtlsImpl extends AbstractIdpTokenService {
     /****  This is for client secret ****/
     private final String idpClientSecret;
 
+    /**
+     * Original constructor - unchanged behaviour, always reads the "idp." prefixed properties
+     * (the existing management-node Keycloak client) from common-configuration.properties.
+     * Delegates to the new overload below so existing callers and tests are unaffected.
+     */
     public IdpTokenServiceMtlsImpl(Supplier<java.net.http.HttpClient> httpClientSupplier, ObjectMapper objectMapper) {
+        this(httpClientSupplier, objectMapper, "idp.");
+    }
+
+    /**
+     * Allows a second, independent instance of this service to be built against a different
+     * Keycloak client, by reading a different property-name PREFIX from the SAME
+     * common-configuration.properties file (e.g. "redis.idp." instead of the default "idp.").
+     * No second file is used - both Keycloak clients' settings live in one file, distinguished
+     * only by their property name prefix.
+     *
+     * @param propertyPrefix the property name prefix to read this client's token URL, JWKS URL,
+     *                       client ID and client secret from (e.g. "idp." or "redis.idp.").
+     */
+    public IdpTokenServiceMtlsImpl(
+            Supplier<java.net.http.HttpClient> httpClientSupplier,
+            ObjectMapper objectMapper,
+            String propertyPrefix) {
         super(
-                PropertyUtil.getPropertiesFromFilePath(COMMON_CONFIG_PROPERTIES).getProperty("idp.jwks.url"),
+                PropertyUtil.getPropertiesFromFilePath(COMMON_CONFIG_PROPERTIES).getProperty(propertyPrefix + "jwks.url"),
                 httpClientSupplier,
                 objectMapper);
         Properties properties = PropertyUtil.getPropertiesFromFilePath(COMMON_CONFIG_PROPERTIES);
-        this.idpTokenUrl = properties.getProperty("idp.token.url");
-        this.idpClientId = properties.getProperty("idp.client.id");
+        this.idpTokenUrl = properties.getProperty(propertyPrefix + "token.url");
+        this.idpClientId = properties.getProperty(propertyPrefix + "client.id");
         /*  This is combined client secret + mTLS */
-        this.idpClientSecret = properties.getProperty("idp.client.secret");
+        this.idpClientSecret = properties.getProperty(propertyPrefix + "client.secret");
 
 // Validation + log what we can safely show
         if (idpTokenUrl == null || idpTokenUrl.isBlank()) {
-            log.error("IDP token URL is missing (property 'idp.token.url').");
+            log.error("IDP token URL is missing (property '{}token.url').", propertyPrefix);
         }
         if (idpClientId == null || idpClientId.isBlank()) {
-            log.error("IDP client ID is missing (property 'idp.client.id').");
+            log.error("IDP client ID is missing (property '{}client.id').", propertyPrefix);
         }
         if (idpClientSecret == null || idpClientSecret.isBlank()) {
-            log.warn("IDP client secret is missing (property 'idp.client.secret').");
+            log.warn("IDP client secret is missing (property '{}client.secret').", propertyPrefix);
         }
 
-        log.info("IDP token service initialised. tokenUrl='{}', clientId='{}', secretPresent={}",
-                idpTokenUrl, idpClientId, idpClientSecret != null && !idpClientSecret.isBlank());
+        log.info("IDP token service initialised [prefix='{}']. tokenUrl='{}', clientId='{}', secretPresent={}",
+                propertyPrefix, idpTokenUrl, idpClientId, idpClientSecret != null && !idpClientSecret.isBlank());
 
 
     }
@@ -157,6 +179,6 @@ public class IdpTokenServiceMtlsImpl extends AbstractIdpTokenService {
         if (managementNodeId == null || managementNodeId.isBlank()) {
             managementNodeId = MANAGEMENT_NODE_DEFAULT_ID;
         }
-        return "management_node_" + managementNodeId + "_access_token";
+        return "management_node_" + managementNodeId + "_" + idpClientId + "_access_token";
     }
 }

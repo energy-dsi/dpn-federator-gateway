@@ -26,6 +26,8 @@
 
 package uk.gov.dbt.ndtp.federator.common.utils;
 
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLParameters;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import redis.clients.jedis.DefaultJedisClientConfig;
@@ -41,6 +43,14 @@ import redis.clients.jedis.params.SetParams;
  * It is used to set and get offsets for a given client and topic.
  * The class is thread-safe.
  * </p>
+ * <p>
+ * NOTE: Redis-native username/password (ACL) authentication is intentionally NOT used here.
+ * Access control is enforced entirely at the application layer, by
+ * {@link #getKeycloakGatedInstance()} requiring a valid Keycloak session
+ * ({@code KeycloakSessionGuard}) before returning a connection - see
+ * {@link #getKeycloakGatedInstance()} for the one exception (IDP token caching) that
+ * deliberately bypasses this gate.
+ * </p>
  */
 public class RedisUtil {
 
@@ -48,8 +58,8 @@ public class RedisUtil {
     public static final String REDIS_PORT = "redis.port";
     public static final String REDIS_KEY_PREFIX = "redis.prefix";
     public static final String REDIS_TLS_ENABLED = "redis.tls.enabled";
-    public static final String REDIS_USERNAME = "redis.username";
-    public static final String REDIS_PASSWORD = "redis.password";
+    public static final String REDIS_TRUSTSTORE_PATH = "redis.truststore.path";
+    public static final String REDIS_TRUSTSTORE_PASSWORD = "redis.truststore.password";
     public static final String REDIS_AES_KEY = "redis.aes.key";
     public static final String LOCALHOST = "localhost";
     public static final String DEFAULT_PORT = "6379";
@@ -69,31 +79,11 @@ public class RedisUtil {
     }
 
     /**
-     * Constructor without authentication.
-     *
-     * @param host         redis host address.
-     * @param port         redis port number.
-     * @param isTLSEnabled whether TLS is enabled.
-     */
-    private RedisUtil(String host, int port, boolean isTLSEnabled) {
-        this(new JedisPooled(host, port, isTLSEnabled));
-    }
-
-    /**
-     * Constructor with support for username and password authentication.
-     *
-     * @param host         redis host address.
-     * @param port         redis port number.
-     * @param isTLSEnabled whether TLS is enabled.
-     * @param username     redis username.
-     * @param password     redis password.
-     */
-    private RedisUtil(String host, int port, boolean isTLSEnabled, String username, String password) {
-        this(buildAuthenticatedRedisConnection(host, port, isTLSEnabled, username, password));
-    }
-
-    /**
-     * Gets the singleton instance of RedisUtil.
+     * Gets the singleton instance of RedisUtil. This is the UNGATED accessor - it does not
+     * require a valid Keycloak session. Used only by {@code IdpTokenServiceMtlsImpl} for its
+     * own token cache, to avoid a circular dependency (checking the cache to avoid a Keycloak
+     * call would otherwise itself require a Keycloak session). Every other Redis-touching call
+     * site in the codebase should use {@link #getKeycloakGatedInstance()} instead.
      *
      * @return the singleton instance of RedisUtil.
      */
@@ -106,42 +96,65 @@ public class RedisUtil {
             LOGGER.info("Using Redis on Port - '{}'", port);
             boolean isTLSEnabled = PropertyUtil.getPropertyBooleanValue(REDIS_TLS_ENABLED, TRUE);
             LOGGER.info("Using TLS with Redis - '{}'", isTLSEnabled);
+            LOGGER.info("Redis-native username/password authentication is disabled; "
+                    + "access control is enforced by the Keycloak gate at the application layer.");
 
-            String username = PropertyUtil.getPropertyValue(REDIS_USERNAME, "");
-            String password = PropertyUtil.getPropertyValue(REDIS_PASSWORD, "");
+            String truststorePath = PropertyUtil.getPropertyValue(REDIS_TRUSTSTORE_PATH, "");
+            String truststorePassword = PropertyUtil.getPropertyValue(REDIS_TRUSTSTORE_PASSWORD, "");
 
-            if (!password.isBlank()) {
-                LOGGER.info("Using authentication with Redis");
-                instance = new RedisUtil(host, port, isTLSEnabled, username, password);
-            } else {
-                instance = new RedisUtil(host, port, isTLSEnabled);
-            }
+            instance = new RedisUtil(buildRedisConnection(host, port, isTLSEnabled, truststorePath, truststorePassword));
         }
         return instance;
     }
 
     /**
-     * Builds a JedisPooled connection with support for username/password
-     * authentication.
+     * Like {@link #getInstance()}, but first ensures a valid Keycloak session exists via
+     * {@code KeycloakSessionGuard.ensureAuthenticated()}, unless Keycloak authentication is
+     * disabled entirely via {@code KeycloakAuthConfig.isEnabled() == false} (local development
+     * testing only). Use this for all Redis access EXCEPT the IDP token cache itself (see
+     * {@link #getInstance()}).
      *
-     * @param host         redis host address.
-     * @param port         redis port number.
-     * @param isTLSEnabled whether TLS is enabled.
-     * @param username     redis username.
-     * @param password     redis password.
+     * @return the same singleton {@link RedisUtil} instance as {@link #getInstance()}.
+     * @throws IllegalStateException if Keycloak authentication is enabled but fails.
      */
-    private static JedisPooled buildAuthenticatedRedisConnection(
-            String host, int port, boolean isTLSEnabled, String username, String password) {
+    public static RedisUtil getKeycloakGatedInstance() {
+        if (!KeycloakAuthConfig.isEnabled()) {
+            return getInstance();
+        }
+        KeycloakSessionGuard.ensureAuthenticated();
+        return getInstance();
+    }
+
+    /**
+     * Builds a JedisPooled connection over TLS, trusting a custom truststore if one is
+     * configured. No username/password (ACL) is ever set - see the class Javadoc.
+     *
+     * @param host              redis host address.
+     * @param port              redis port number.
+     * @param isTLSEnabled      whether TLS is enabled.
+     * @param truststorePath    path to a truststore file (JKS or PKCS12, auto-detected), or blank
+     *                          to use the JVM default trust store.
+     * @param truststorePassword password for the truststore.
+     */
+    private static JedisPooled buildRedisConnection(
+            String host, int port, boolean isTLSEnabled, String truststorePath, String truststorePassword) {
 
         DefaultJedisClientConfig.Builder jedisClientConfigBuilder =
                 DefaultJedisClientConfig.builder().ssl(isTLSEnabled);
 
-        if (!username.isBlank()) {
-            jedisClientConfigBuilder.user(username);
-        }
+        if (isTLSEnabled && truststorePath != null && !truststorePath.isBlank()) {
+            LOGGER.info("Configuring Redis TLS using truststore '{}'", truststorePath);
+            SSLContext sslContext = SSLUtils.createSSLContextWithTrustStore(truststorePath, truststorePassword);
+            jedisClientConfigBuilder.sslSocketFactory(sslContext.getSocketFactory());
 
-        if (!password.isBlank()) {
-            jedisClientConfigBuilder.password(password);
+            // A bare SSLSocketFactory only validates the certificate CHAIN - it does not
+            // automatically validate that the certificate's SAN matches the hostname being
+            // connected to unless explicitly told to. "HTTPS" is the standard JDK algorithm
+            // name for hostname verification generically, not specific to the HTTP protocol.
+            SSLParameters sslParameters = new SSLParameters();
+            sslParameters.setEndpointIdentificationAlgorithm("HTTPS");
+            jedisClientConfigBuilder.sslParameters(sslParameters);
+            LOGGER.info("Hostname verification explicitly enabled for Redis TLS connection");
         }
 
         return new JedisPooled(new HostAndPort(host, port), jedisClientConfigBuilder.build());

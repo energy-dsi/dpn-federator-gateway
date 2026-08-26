@@ -93,6 +93,28 @@ public class GRPCUtils {
     }
 
     /**
+     * Builds a second, independent {@link IdpTokenService} for gating Redis access via
+     * {@code KeycloakSessionGuard}, pointed at a dedicated Keycloak client separate from the
+     * one used for the management-node connection ({@link #createIdpTokenService()}).
+     * <p>
+     * Reads its client identity (token URL, JWKS URL, client ID, client secret) from the SAME
+     * common-configuration.properties file, under the "redis.idp." property prefix instead of
+     * "idp." - no second properties file is used.
+     * </p>
+     */
+    public static IdpTokenService createRedisIdpTokenService() {
+        Properties properties = PropertyUtil.getPropertiesFromFilePath(COMMON_CONFIG_PROPERTIES);
+        ObjectMapper mapper = ObjectMapperUtil.getInstance();
+
+        SecretProvider secretProvider = PropertyUtil.createSecretProvider(properties);
+        PropertyUtil.overrideWithSecrets(properties, secretProvider);
+
+        LOGGER.info("Redis-gating IDP token service using dedicated Keycloak client (mtls, prefix='redis.idp.')");
+        Supplier<HttpClient> clientSupplier = () -> HttpClientFactoryUtils.createHttpClientWithMtls(properties);
+        return new IdpTokenServiceMtlsImpl(clientSupplier, mapper, "redis.idp.");
+    }
+
+    /**
      * Generate ChannelCredentials with mTLS. When {@code vault.tls.enabled=true} the identity
      * and trust material are read from Vault in memory; otherwise the client P12 / truststore
      * files are used.

@@ -38,6 +38,8 @@ public class ProducerConsumerConfigServiceFactory {
                 PropertyUtil.overrideWithSecrets(properties, secretProvider);
 
                 IdpTokenService tokenService = GRPCUtils.createIdpTokenService();
+                IdpTokenService redisIdpTokenService = GRPCUtils.createRedisIdpTokenService();
+                KeycloakSessionGuard.configure(redisIdpTokenService::fetchToken);
                 Supplier<java.net.http.HttpClient> httpClientSupplier = () -> HttpClientFactoryUtils.createHttpClientWithMtls(properties);
                 var managementNodeDataHandler = new ManagementNodeDataHandler(httpClientSupplier, mapper, tokenService);
                 InMemoryConfigurationStore store = InMemoryConfigurationStore.getInstance();

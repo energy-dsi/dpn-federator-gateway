@@ -214,7 +214,7 @@ class IdpTokenServicePrivateJwtImplTest {
         try (MockedStatic<RedisUtil> redisMock = mockStatic(RedisUtil.class)) {
             RedisUtil redisInstance = mock(RedisUtil.class);
             redisMock.when(RedisUtil::getInstance).thenReturn(redisInstance);
-            when(redisInstance.getValue(eq("management_node_default_access_token"), eq(String.class), eq(true)))
+            when(redisInstance.getValue(eq("management_node_default_test-client_access_token"), eq(String.class), eq(true)))
                     .thenReturn("cached-access-token");
 
             IdpTokenServicePrivateJwtImpl service = buildService(basePrivateJwtProperties());

@@ -31,6 +31,8 @@ import static uk.gov.dbt.ndtp.federator.common.utils.GRPCUtils.*;
 import io.grpc.*;
 import io.opentelemetry.instrumentation.grpc.v1_6.GrpcTelemetry;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.Executors;
@@ -50,12 +52,7 @@ import uk.gov.dbt.ndtp.federator.common.service.ocsp.OcspCertificateVerification
 import uk.gov.dbt.ndtp.federator.common.service.secret.SecretProvider;
 import uk.gov.dbt.ndtp.federator.common.service.secret.VaultTlsSupport;
 import uk.gov.dbt.ndtp.federator.common.telemetry.OpenTelemetryConfig;
-import uk.gov.dbt.ndtp.federator.common.utils.GRPCUtils;
-import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
-import uk.gov.dbt.ndtp.federator.common.utils.ReloadableX509KeyManager;
-import uk.gov.dbt.ndtp.federator.common.utils.ReloadableX509TrustManager;
-import uk.gov.dbt.ndtp.federator.common.utils.SSLUtils;
-import uk.gov.dbt.ndtp.federator.common.utils.ThreadUtil;
+import uk.gov.dbt.ndtp.federator.common.utils.*;
 import uk.gov.dbt.ndtp.federator.server.OcspServerInterceptor;
 import uk.gov.dbt.ndtp.federator.server.grpc.interceptor.AuthServerInterceptor;
 import uk.gov.dbt.ndtp.federator.server.grpc.interceptor.ConsumerVerificationServerInterceptor;
@@ -155,15 +152,22 @@ public class GRPCServer implements AutoCloseable {
         // W3C trace context the federator client sent. Registered outermost so a span exists
         // even if auth later rejects the call.
         //  GrpcTelemetry grpcTelemetry = GrpcTelemetry.create(OpenTelemetryConfig.get()); // DISABLED: NoClassDefFoundError NetworkAttributes
+
+        // AuthServerInterceptor (Bearer-token gRPC authentication) is gated by
+        // KeycloakAuthConfig.isEnabled() - local development testing only, see that class.
+        // Every other interceptor always runs regardless of the switch.
+        List<ServerInterceptor> interceptors = new ArrayList<>();
+        interceptors.add(new ConsumerVerificationServerInterceptor(tokenService, commonProperties));
+        if (KeycloakAuthConfig.isEnabled()) {
+            interceptors.add(new AuthServerInterceptor(tokenService));
+        }
+        interceptors.add(new CustomServerInterceptor());
+        interceptors.add(new OcspServerInterceptor(tokenService, ocspService));
+
         return builder.executor(ThreadUtil.threadExecutor(GRPC_SERVER))
                 .keepAliveTime(PropertyUtil.getPropertyIntValue(SERVER_KEEP_ALIVE_TIME, FIVE), TimeUnit.SECONDS)
                 .keepAliveTimeout(PropertyUtil.getPropertyIntValue(SERVER_KEEP_ALIVE_TIMEOUT, ONE), TimeUnit.SECONDS)
-                .addService(ServerInterceptors.intercept(
-                        serviceDef,
-                        (ServerInterceptor) new ConsumerVerificationServerInterceptor(tokenService, commonProperties),
-                        (ServerInterceptor) new AuthServerInterceptor(tokenService),
-                        (ServerInterceptor) new CustomServerInterceptor(),
-                        (ServerInterceptor) new OcspServerInterceptor(tokenService,ocspService)));
+                .addService(ServerInterceptors.intercept(serviceDef, interceptors));
 
     }
 
