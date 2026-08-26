@@ -308,6 +308,9 @@ public class ClientDynamicConfigJob implements Job {
             final String nodeId,
             final List<RecurrentJobRequest> requests, String producerIdpClientId) {
         final RecurrentJobRequest request = createJobRequest(product, conn, nodeId, producerIdpClientId);
+        if (request == null) {
+            return;
+        }
         requests.add(request);
         log.debug(
                 LOG_JOB,
@@ -322,7 +325,8 @@ public class ClientDynamicConfigJob implements Job {
             final ProductDTO product, final ConnectionProperties conn, final String nodeId, String producerIdpClientId) {
         final String type = product.getType();
         if (type == null) {
-            throw new IllegalArgumentException("Product type cannot be null for product: " + product.getName());
+            log.warn("Product type is null, skipping product: {}", product.getName());
+            return null;
         }
 
         switch (type.toLowerCase()) {
@@ -341,7 +345,8 @@ public class ClientDynamicConfigJob implements Job {
                 return buildRecurrentJobRequest(jobInstance, params);
             }
             default:
-                throw new IllegalArgumentException("Invalid product type:" + product.getType());
+                log.warn("Unsupported product type '{}', skipping product: {}", product.getType(), product.getName());
+                return null;
         }
     }
 
