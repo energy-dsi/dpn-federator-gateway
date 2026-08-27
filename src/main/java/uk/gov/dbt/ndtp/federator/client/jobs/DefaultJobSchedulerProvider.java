@@ -11,6 +11,7 @@ import java.util.Objects;
 import java.util.UUID;
 import javax.net.ssl.KeyManager;
 import javax.net.ssl.SSLContext;
+import javax.net.ssl.TrustManager;
 import lombok.extern.slf4j.Slf4j;
 import org.jobrunr.configuration.JobRunr;
 import org.jobrunr.jobs.RecurringJob;
@@ -24,8 +25,10 @@ import uk.gov.dbt.ndtp.federator.client.jobs.auth.JobRunnerAuthProperties;
 import uk.gov.dbt.ndtp.federator.client.jobs.params.JobParams;
 import uk.gov.dbt.ndtp.federator.client.jobs.params.RecurrentJobRequest;
 import uk.gov.dbt.ndtp.federator.client.lifecycle.ShutdownThread;
+import uk.gov.dbt.ndtp.federator.common.service.secret.VaultTlsSupport;
 import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
 import uk.gov.dbt.ndtp.federator.common.utils.SSLUtils;
+import uk.gov.dbt.ndtp.federator.exceptions.FederatorSslException;
 
 /**
  * Singleton provider to configure and manage the lifecycle of JobRunr background job scheduler.
@@ -221,14 +224,25 @@ public final class DefaultJobSchedulerProvider implements JobSchedulerProvider {
     }
 
     /**
-     * Builds the JWKS-fetching {@link BearerTokenVerifier} for the auth gateway. When the client's
-     * own mTLS truststore is configured ({@code client.truststoreFilePath}), it's reused to trust
-     * the Keycloak issuer's TLS certificate - required when the issuer is signed by a private/internal
-     * CA (e.g. an in-cluster hostname) that the JDK default trust store wouldn't otherwise recognise.
-     * Falls back to the JDK default trust store when unset, preserving prior behaviour for issuers
-     * with a publicly-trusted certificate (or plain HTTP, e.g. local testing).
+     * Builds the JWKS-fetching {@link BearerTokenVerifier} for the auth gateway, reusing whichever
+     * mTLS trust source the rest of the client already uses to trust the Keycloak issuer's TLS
+     * certificate - required when the issuer is signed by a private/internal CA (e.g. an in-cluster
+     * hostname) that the JDK default trust store wouldn't otherwise recognise. Mirrors the same
+     * {@code VaultTlsSupport.isVaultTlsEnabled()} switch used by {@link uk.gov.dbt.ndtp.federator.common.utils.GRPCUtils}
+     * and {@link uk.gov.dbt.ndtp.federator.common.utils.HttpClientFactoryUtils}: when Vault-sourced
+     * TLS is enabled, trust material is built in memory from Vault (no keystore files on disk -
+     * required in environments where there is no SMB/EFS file share to mount); otherwise it falls
+     * back to {@code client.truststoreFilePath}, and to the JDK default trust store when that's
+     * unset - preserving prior behaviour for issuers with a publicly-trusted certificate (or plain
+     * HTTP, e.g. local testing).
      */
     private BearerTokenVerifier buildBearerTokenVerifier(JobRunnerAuthProperties authProperties) {
+        if (VaultTlsSupport.isVaultTlsEnabled()) {
+            SSLContext sslContext = trustOnlySslContext(VaultTlsSupport.trustManagers());
+            java.net.http.HttpClient httpClient =
+                    java.net.http.HttpClient.newBuilder().sslContext(sslContext).build();
+            return new BearerTokenVerifier(authProperties, () -> httpClient);
+        }
         String truststorePath = PropertyUtil.getPropertyValue(PROP_CLIENT_TRUSTSTORE_FILE_PATH, "");
         if (truststorePath.isBlank()) {
             return new BearerTokenVerifier(authProperties);
@@ -238,6 +252,16 @@ public final class DefaultJobSchedulerProvider implements JobSchedulerProvider {
         java.net.http.HttpClient httpClient =
                 java.net.http.HttpClient.newBuilder().sslContext(sslContext).build();
         return new BearerTokenVerifier(authProperties, () -> httpClient);
+    }
+
+    private static SSLContext trustOnlySslContext(TrustManager[] trustManagers) {
+        try {
+            SSLContext sslContext = SSLContext.getInstance("TLS");
+            sslContext.init(null, trustManagers, null);
+            return sslContext;
+        } catch (Exception e) {
+            throw new FederatorSslException("Failed to create SSLContext from Vault trust material.", e);
+        }
     }
 
     private void shutdown() {

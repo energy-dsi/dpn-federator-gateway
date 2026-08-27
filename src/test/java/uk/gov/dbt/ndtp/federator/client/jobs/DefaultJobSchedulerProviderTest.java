@@ -289,6 +289,16 @@ class DefaultJobSchedulerProviderTest {
         int dashboardPort = freePort();
         int gatewayPort = freePort();
 
+        // VaultTlsSupport.isVaultTlsEnabled() defaults to true when 'vault.tls.enabled' is unset -
+        // disable it explicitly via a common-config file so this test exercises the legacy
+        // client.truststoreFilePath path (unset here) rather than the Vault-backed trust source.
+        File commonConfig = Files.createTempFile("common-config", ".properties").toFile();
+        try (FileOutputStream out = new FileOutputStream(commonConfig)) {
+            Properties vaultDisabled = new Properties();
+            vaultDisabled.setProperty("vault.tls.enabled", "false");
+            vaultDisabled.store(out, null);
+        }
+
         Properties props = new Properties();
         props.setProperty("jobs.dashboard.enabled", "true");
         props.setProperty("jobs.background.enabled", "false");
@@ -296,6 +306,7 @@ class DefaultJobSchedulerProviderTest {
         props.setProperty("jobs.dashboard.auth.enabled", "true");
         props.setProperty("jobs.dashboard.auth.issuer.url", "https://keycloak.invalid/realms/test");
         props.setProperty("jobs.dashboard.auth.port", String.valueOf(gatewayPort));
+        props.setProperty("common.configuration", commonConfig.getAbsolutePath());
 
         PropertyUtil.clear();
         File authProps = Files.createTempFile("auth-props", ".properties").toFile();
@@ -317,6 +328,58 @@ class DefaultJobSchedulerProviderTest {
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
 
             assertEquals(401, response.statusCode());
+        } finally {
+            provider.stop();
+            authProps.delete();
+            commonConfig.delete();
+        }
+    }
+
+    @Test
+    void ensureStarted_withDashboardAuthEnabledAndVaultTls_usesVaultTrustManagers() throws Exception {
+        int dashboardPort = freePort();
+        int gatewayPort = freePort();
+
+        // vault.tls.enabled defaults to true, so no common-config override is needed here; mock
+        // VaultTlsSupport itself so this doesn't require a real Vault (mirrors the approach used
+        // in GRPCUtilsTest for the same isVaultTlsEnabled() switch).
+        Properties props = new Properties();
+        props.setProperty("jobs.dashboard.enabled", "true");
+        props.setProperty("jobs.background.enabled", "false");
+        props.setProperty("jobs.dashboard.port", String.valueOf(dashboardPort));
+        props.setProperty("jobs.dashboard.auth.enabled", "true");
+        props.setProperty("jobs.dashboard.auth.issuer.url", "https://keycloak.invalid/realms/test");
+        props.setProperty("jobs.dashboard.auth.port", String.valueOf(gatewayPort));
+
+        PropertyUtil.clear();
+        File authProps = Files.createTempFile("auth-props", ".properties").toFile();
+        try (FileOutputStream out = new FileOutputStream(authProps)) {
+            props.store(out, null);
+        }
+        PropertyUtil.init(authProps);
+
+        DefaultJobSchedulerProvider provider = new DefaultJobSchedulerProvider();
+        try (MockedStatic<uk.gov.dbt.ndtp.federator.common.service.secret.VaultTlsSupport> vaultMock =
+                mockStatic(uk.gov.dbt.ndtp.federator.common.service.secret.VaultTlsSupport.class)) {
+            javax.net.ssl.TrustManagerFactory tmf = javax.net.ssl.TrustManagerFactory.getInstance(
+                    javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm());
+            tmf.init((java.security.KeyStore) null);
+
+            vaultMock.when(uk.gov.dbt.ndtp.federator.common.service.secret.VaultTlsSupport::isVaultTlsEnabled)
+                    .thenReturn(true);
+            vaultMock.when(uk.gov.dbt.ndtp.federator.common.service.secret.VaultTlsSupport::trustManagers)
+                    .thenReturn(tmf.getTrustManagers());
+
+            provider.ensureStarted();
+
+            HttpClient httpClient = HttpClient.newHttpClient();
+            HttpRequest request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + gatewayPort + "/"))
+                    .GET()
+                    .build();
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+
+            assertEquals(401, response.statusCode());
+            vaultMock.verify(uk.gov.dbt.ndtp.federator.common.service.secret.VaultTlsSupport::trustManagers);
         } finally {
             provider.stop();
             authProps.delete();
