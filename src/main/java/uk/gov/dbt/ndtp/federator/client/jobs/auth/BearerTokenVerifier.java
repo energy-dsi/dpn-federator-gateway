@@ -15,10 +15,14 @@ import com.nimbusds.jose.jwk.KeyUse;
 import com.nimbusds.jose.jwk.RSAKey;
 import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.SignedJWT;
+import java.io.InputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.security.KeyStore;
 import java.text.ParseException;
 import java.time.Duration;
 import java.time.Instant;
@@ -27,6 +31,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Supplier;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.TrustManagerFactory;
 import lombok.extern.slf4j.Slf4j;
 
 /**
@@ -53,7 +59,38 @@ public class BearerTokenVerifier {
     private volatile Instant cacheExpiresAt = Instant.EPOCH;
 
     public BearerTokenVerifier(JobRunnerAuthProperties config) {
-        this(config, HttpClient::newHttpClient);
+        this(config, () -> HttpClient.newBuilder()
+                .sslContext(trustStoreSslContext())
+                .build());
+    }
+
+    /**
+     * Builds an SSLContext explicitly from the {@code javax.net.ssl.trustStore} system properties,
+     * rather than relying on {@link SSLContext#getDefault()}. This process also initialises gRPC
+     * and the OpenTelemetry SDK, either of which may touch the JVM-wide default SSLContext before
+     * this class ever runs; loading the configured trust store directly here removes that
+     * dependency on ambient JVM state.
+     */
+    private static SSLContext trustStoreSslContext() {
+        String trustStorePath = System.getProperty("javax.net.ssl.trustStore");
+        try {
+            if (trustStorePath == null) {
+                return SSLContext.getDefault();
+            }
+            String trustStoreType = System.getProperty("javax.net.ssl.trustStoreType", KeyStore.getDefaultType());
+            String trustStorePassword = System.getProperty("javax.net.ssl.trustStorePassword", "");
+            KeyStore trustStore = KeyStore.getInstance(trustStoreType);
+            try (InputStream in = Files.newInputStream(Path.of(trustStorePath))) {
+                trustStore.load(in, trustStorePassword.toCharArray());
+            }
+            TrustManagerFactory tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+            tmf.init(trustStore);
+            SSLContext ctx = SSLContext.getInstance("TLS");
+            ctx.init(null, tmf.getTrustManagers(), null);
+            return ctx;
+        } catch (Exception e) {
+            throw new IllegalStateException("Failed to build SSLContext from javax.net.ssl.trustStore=" + trustStorePath, e);
+        }
     }
 
     public BearerTokenVerifier(JobRunnerAuthProperties config, Supplier<HttpClient> httpClientSupplier) {
