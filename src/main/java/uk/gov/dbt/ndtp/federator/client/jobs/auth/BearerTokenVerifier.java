@@ -199,6 +199,19 @@ public class BearerTokenVerifier {
             log.debug("Could not parse realm_access claim: {}", e.getMessage());
         }
 
+        // Some realms map realm roles onto a flat top-level "roles" claim instead of the
+        // Keycloak-standard nested realm_access.roles (a custom protocol mapper choice, not part
+        // of the OIDC/Keycloak default) - check for that shape too.
+        try {
+            if (claims.getClaim("roles") instanceof List<?> flatRoles) {
+                for (Object role : flatRoles) {
+                    roles.add(String.valueOf(role));
+                }
+            }
+        } catch (RuntimeException e) {
+            log.debug("Could not parse flat roles claim: {}", e.getMessage());
+        }
+
         if (config.getAudience() != null) {
             try {
                 Map<String, Object> resourceAccess = claims.getJSONObjectClaim("resource_access");

@@ -142,4 +142,56 @@ class JobRunnerAuthPropertiesTest {
         assertEquals(null, props.getAdminRole());
         assertEquals(null, props.getReaderRole());
     }
+
+    @Test
+    void browserLogin_disabledByDefault_whenOidcClientNotConfigured() throws Exception {
+        initWith(new Properties());
+
+        JobRunnerAuthProperties props = JobRunnerAuthProperties.load(8085);
+
+        assertFalse(props.isBrowserLoginEnabled());
+    }
+
+    @Test
+    void enabled_withOnlyOidcClientId_throwsConfigurationException() throws Exception {
+        Properties properties = new Properties();
+        properties.setProperty("jobs.dashboard.auth.enabled", "true");
+        properties.setProperty("jobs.dashboard.auth.issuer.url", "https://keycloak.example.com/realms/dpn");
+        properties.setProperty("jobs.dashboard.auth.oidc.client.id", "dpn-service-client");
+        initWith(properties);
+
+        assertThrows(ConfigurationException.class, () -> JobRunnerAuthProperties.load(8085));
+    }
+
+    @Test
+    void enabled_withOidcClientButNoPublicBaseUrl_throwsConfigurationException() throws Exception {
+        Properties properties = new Properties();
+        properties.setProperty("jobs.dashboard.auth.enabled", "true");
+        properties.setProperty("jobs.dashboard.auth.issuer.url", "https://keycloak.example.com/realms/dpn");
+        properties.setProperty("jobs.dashboard.auth.oidc.client.id", "dpn-service-client");
+        properties.setProperty("jobs.dashboard.auth.oidc.client.secret", "secret");
+        initWith(properties);
+
+        assertThrows(ConfigurationException.class, () -> JobRunnerAuthProperties.load(8085));
+    }
+
+    @Test
+    void enabled_withOidcClientAndPublicBaseUrl_derivesAuthorizationAndTokenEndpoints() throws Exception {
+        Properties properties = new Properties();
+        properties.setProperty("jobs.dashboard.auth.enabled", "true");
+        properties.setProperty("jobs.dashboard.auth.issuer.url", "https://keycloak.example.com/realms/dpn");
+        properties.setProperty("jobs.dashboard.auth.oidc.client.id", "dpn-service-client");
+        properties.setProperty("jobs.dashboard.auth.oidc.client.secret", "secret");
+        properties.setProperty("jobs.dashboard.auth.oidc.public.base.url", "https://dashboard.example.com");
+        initWith(properties);
+
+        JobRunnerAuthProperties props = JobRunnerAuthProperties.load(8085);
+
+        assertTrue(props.isBrowserLoginEnabled());
+        assertEquals(
+                "https://keycloak.example.com/realms/dpn/protocol/openid-connect/auth",
+                props.getAuthorizationEndpoint());
+        assertEquals(
+                "https://keycloak.example.com/realms/dpn/protocol/openid-connect/token", props.getTokenEndpoint());
+    }
 }

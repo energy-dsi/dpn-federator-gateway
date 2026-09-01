@@ -5,6 +5,7 @@
 package uk.gov.dbt.ndtp.federator.client.jobs.auth;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -102,9 +103,47 @@ class JobRunnerAuthGatewayTest {
                 "Bearer",
                 300,
                 internalPort,
-                publicPort);
+                publicPort,
+                null,
+                null,
+                "/oauth2/callback",
+                "openid",
+                "jobrunr_at",
+                true,
+                null,
+                null,
+                null);
         BearerTokenVerifier verifier = new BearerTokenVerifier(config, () -> mockJwksClient);
         JobRunnerAuthGateway newGateway = new JobRunnerAuthGateway(publicPort, config, verifier);
+        newGateway.start();
+        return newGateway;
+    }
+
+    private JobRunnerAuthGateway startGatewayWithBrowserLogin(int publicPort, int internalPort) {
+        JobRunnerAuthProperties config = new JobRunnerAuthProperties(
+                true,
+                null,
+                "http://keycloak.invalid/certs",
+                null,
+                null,
+                null,
+                "Authorization",
+                "Bearer",
+                300,
+                internalPort,
+                publicPort,
+                "test-client",
+                "test-client-secret",
+                "/oauth2/callback",
+                "openid",
+                "jobrunr_at",
+                false,
+                "http://127.0.0.1:" + publicPort,
+                "http://keycloak.invalid/auth",
+                "http://keycloak.invalid/token");
+        BearerTokenVerifier verifier = new BearerTokenVerifier(config, () -> mockJwksClient);
+        OidcLoginFlow oidcLoginFlow = new OidcLoginFlow(config, () -> mockJwksClient);
+        JobRunnerAuthGateway newGateway = new JobRunnerAuthGateway(publicPort, config, verifier, oidcLoginFlow);
         newGateway.start();
         return newGateway;
     }
@@ -221,6 +260,43 @@ class JobRunnerAuthGatewayTest {
                 .GET()
                 .build();
         assertEquals(403, client.send(getRequest, HttpResponse.BodyHandlers.ofString()).statusCode());
+    }
+
+    @Test
+    void browserRequestWithoutToken_isRedirectedToKeycloakLogin_whenBrowserLoginEnabled() throws Exception {
+        int publicPort = freePort();
+        int internalPort = freePort();
+        upstream = startUpstream(internalPort);
+        gateway = startGatewayWithBrowserLogin(publicPort, internalPort);
+
+        HttpClient client = HttpClient.newHttpClient();
+        HttpRequest request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + publicPort + "/jobs/1"))
+                .GET()
+                .build();
+        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(302, response.statusCode());
+        String location = response.headers().firstValue("Location").orElse("");
+        assertTrue(location.startsWith("http://keycloak.invalid/auth?"));
+        assertTrue(location.contains("client_id=test-client"));
+        assertTrue(response.headers().firstValue("Set-Cookie").orElse("").contains("jobrunr_oidc_state"));
+    }
+
+    @Test
+    void apiRequestWithBearerHeader_getsPlain401_evenWhenBrowserLoginEnabled() throws Exception {
+        int publicPort = freePort();
+        int internalPort = freePort();
+        upstream = startUpstream(internalPort);
+        gateway = startGatewayWithBrowserLogin(publicPort, internalPort);
+
+        HttpClient client = HttpClient.newHttpClient();
+        HttpRequest request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + publicPort + "/jobs/1"))
+                .header("Authorization", "Bearer not-a-real-token")
+                .GET()
+                .build();
+        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(401, response.statusCode());
     }
 
     private static int freePort() throws Exception {

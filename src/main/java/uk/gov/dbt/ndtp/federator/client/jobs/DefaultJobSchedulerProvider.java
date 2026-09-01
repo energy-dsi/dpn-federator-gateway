@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.function.Supplier;
 import javax.net.ssl.KeyManager;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManager;
@@ -22,6 +23,7 @@ import org.jobrunr.storage.InMemoryStorageProvider;
 import uk.gov.dbt.ndtp.federator.client.jobs.auth.BearerTokenVerifier;
 import uk.gov.dbt.ndtp.federator.client.jobs.auth.JobRunnerAuthGateway;
 import uk.gov.dbt.ndtp.federator.client.jobs.auth.JobRunnerAuthProperties;
+import uk.gov.dbt.ndtp.federator.client.jobs.auth.OidcLoginFlow;
 import uk.gov.dbt.ndtp.federator.client.jobs.params.JobParams;
 import uk.gov.dbt.ndtp.federator.client.jobs.params.RecurrentJobRequest;
 import uk.gov.dbt.ndtp.federator.client.lifecycle.ShutdownThread;
@@ -183,13 +185,19 @@ public final class DefaultJobSchedulerProvider implements JobSchedulerProvider {
             jobScheduler = cfg.initialize().getJobScheduler();
 
             if (dashboardAuthEnabled) {
+                OidcLoginFlow oidcLoginFlow = buildOidcLoginFlow(authProperties);
                 authGateway = new JobRunnerAuthGateway(
-                        authProperties.getGatewayPort(), authProperties, buildBearerTokenVerifier(authProperties));
+                        authProperties.getGatewayPort(),
+                        authProperties,
+                        buildBearerTokenVerifier(authProperties),
+                        oidcLoginFlow);
                 authGateway.start();
                 log.info(
-                        "Job Runner UI Keycloak authentication enabled (gateway on port {}, forwarding to dashboard port {})",
+                        "Job Runner UI Keycloak authentication enabled (gateway on port {}, forwarding to dashboard"
+                                + " port {}, browserLogin={})",
                         authProperties.getGatewayPort(),
-                        dashboardPort);
+                        dashboardPort,
+                        oidcLoginFlow != null);
             }
 
             boolean dashboardHttpsEnabled = dashboardEnabled
@@ -237,21 +245,52 @@ public final class DefaultJobSchedulerProvider implements JobSchedulerProvider {
      * HTTP, e.g. local testing).
      */
     private BearerTokenVerifier buildBearerTokenVerifier(JobRunnerAuthProperties authProperties) {
+        Supplier<java.net.http.HttpClient> supplier = buildAuthHttpClientSupplier();
+        return supplier == null
+                ? new BearerTokenVerifier(authProperties)
+                : new BearerTokenVerifier(authProperties, supplier);
+    }
+
+    /**
+     * Builds the {@link OidcLoginFlow} used for browser access to the Job Runner UI - null when
+     * {@code jobs.dashboard.auth.oidc.client.id}/{@code .client.secret} aren't both configured,
+     * in which case the gateway falls back to header-only (API-style) authentication. Reuses the
+     * same mTLS trust source as {@link #buildBearerTokenVerifier} so the token-endpoint call also
+     * trusts the Keycloak issuer's TLS certificate.
+     */
+    private OidcLoginFlow buildOidcLoginFlow(JobRunnerAuthProperties authProperties) {
+        if (!authProperties.isBrowserLoginEnabled()) {
+            return null;
+        }
+        Supplier<java.net.http.HttpClient> supplier = buildAuthHttpClientSupplier();
+        return new OidcLoginFlow(
+                authProperties, supplier != null ? supplier : java.net.http.HttpClient::newHttpClient);
+    }
+
+    /**
+     * Builds the HttpClient trust source shared by the auth gateway's JWKS fetch and OIDC token
+     * exchange - both need to trust the Keycloak issuer's TLS certificate, so both reuse whichever
+     * mTLS trust source the rest of the client already uses (Vault-sourced trust material, then
+     * {@code client.truststoreFilePath}). Returns null when neither is configured, so callers fall
+     * back to their own default (JDK trust store) - preserving prior behaviour for issuers with a
+     * publicly-trusted certificate (or plain HTTP, e.g. local testing).
+     */
+    private Supplier<java.net.http.HttpClient> buildAuthHttpClientSupplier() {
         if (VaultTlsSupport.isVaultTlsEnabled()) {
             SSLContext sslContext = trustOnlySslContext(VaultTlsSupport.trustManagers());
             java.net.http.HttpClient httpClient =
                     java.net.http.HttpClient.newBuilder().sslContext(sslContext).build();
-            return new BearerTokenVerifier(authProperties, () -> httpClient);
+            return () -> httpClient;
         }
         String truststorePath = PropertyUtil.getPropertyValue(PROP_CLIENT_TRUSTSTORE_FILE_PATH, "");
         if (truststorePath.isBlank()) {
-            return new BearerTokenVerifier(authProperties);
+            return null;
         }
         String truststorePassword = PropertyUtil.getPropertyValue(PROP_CLIENT_TRUSTSTORE_PASSWORD, "");
         SSLContext sslContext = SSLUtils.createSSLContextWithTrustStore(truststorePath, truststorePassword);
         java.net.http.HttpClient httpClient =
                 java.net.http.HttpClient.newBuilder().sslContext(sslContext).build();
-        return new BearerTokenVerifier(authProperties, () -> httpClient);
+        return () -> httpClient;
     }
 
     private static SSLContext trustOnlySslContext(TrustManager[] trustManagers) {

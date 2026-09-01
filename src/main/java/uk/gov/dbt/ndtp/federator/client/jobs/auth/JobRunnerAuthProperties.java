@@ -44,11 +44,31 @@ public final class JobRunnerAuthProperties {
     public static final String PROP_JWKS_CACHE_TTL_SECONDS = "jobs.dashboard.auth.jwks.cache.ttl.seconds";
     // The gateway's own bind port; jobs.dashboard.port always remains the dashboard's own port.
     public static final String PROP_GATEWAY_PORT = "jobs.dashboard.auth.port";
+    // Browser login (OIDC authorization code flow), handled entirely by JobRunnerAuthGateway/
+    // OidcLoginFlow - no external login-proxy required. Optional: only active when both client
+    // id and secret are set (see isBrowserLoginEnabled()).
+    public static final String PROP_OIDC_CLIENT_ID = "jobs.dashboard.auth.oidc.client.id";
+    public static final String PROP_OIDC_CLIENT_SECRET = "jobs.dashboard.auth.oidc.client.secret";
+    public static final String PROP_OIDC_REDIRECT_PATH = "jobs.dashboard.auth.oidc.redirect.path";
+    public static final String PROP_OIDC_SCOPE = "jobs.dashboard.auth.oidc.scope";
+    public static final String PROP_OIDC_COOKIE_NAME = "jobs.dashboard.auth.oidc.cookie.name";
+    public static final String PROP_OIDC_COOKIE_SECURE = "jobs.dashboard.auth.oidc.cookie.secure";
+    // Public URL the browser actually uses to reach the dashboard (e.g. through
+    // HttpsDashboardProxy) - the gateway itself only ever sees the internal loopback
+    // request, so the redirect_uri sent to Keycloak can't be derived from the incoming
+    // request's Host header. Required when browser login is enabled.
+    public static final String PROP_OIDC_PUBLIC_BASE_URL = "jobs.dashboard.auth.oidc.public.base.url";
 
     private static final String DEFAULT_HEADER_NAME = "Authorization";
     private static final String DEFAULT_HEADER_SCHEME = "Bearer";
     private static final String DEFAULT_JWKS_CACHE_TTL_SECONDS = "300";
+    private static final String DEFAULT_OIDC_REDIRECT_PATH = "/oauth2/callback";
+    private static final String DEFAULT_OIDC_SCOPE = "openid";
+    private static final String DEFAULT_OIDC_COOKIE_NAME = "jobrunr_at";
+    private static final String DEFAULT_OIDC_COOKIE_SECURE = "true";
     private static final String OPENID_CERTS_PATH = "/protocol/openid-connect/certs";
+    private static final String OPENID_AUTH_PATH = "/protocol/openid-connect/auth";
+    private static final String OPENID_TOKEN_PATH = "/protocol/openid-connect/token";
     private static final int DEFAULT_GATEWAY_PORT_OFFSET = 10000;
 
     private final boolean enabled;
@@ -64,6 +84,15 @@ public final class JobRunnerAuthProperties {
     private final int internalPort;
     // The gateway's own bind port - jobs.dashboard.auth.port.
     private final int gatewayPort;
+    private final String oidcClientId;
+    private final String oidcClientSecret;
+    private final String oidcRedirectPath;
+    private final String oidcScope;
+    private final String oidcCookieName;
+    private final boolean oidcCookieSecure;
+    private final String oidcPublicBaseUrl;
+    private final String authorizationEndpoint;
+    private final String tokenEndpoint;
 
     // Package-private (rather than private) so tests in this package can build instances directly
     // without going through PropertyUtil.
@@ -78,7 +107,16 @@ public final class JobRunnerAuthProperties {
             String headerScheme,
             long jwksCacheTtlSeconds,
             int internalPort,
-            int gatewayPort) {
+            int gatewayPort,
+            String oidcClientId,
+            String oidcClientSecret,
+            String oidcRedirectPath,
+            String oidcScope,
+            String oidcCookieName,
+            boolean oidcCookieSecure,
+            String oidcPublicBaseUrl,
+            String authorizationEndpoint,
+            String tokenEndpoint) {
         this.enabled = enabled;
         this.issuerUrl = issuerUrl;
         this.jwksUrl = jwksUrl;
@@ -90,6 +128,15 @@ public final class JobRunnerAuthProperties {
         this.jwksCacheTtlSeconds = jwksCacheTtlSeconds;
         this.internalPort = internalPort;
         this.gatewayPort = gatewayPort;
+        this.oidcClientId = oidcClientId;
+        this.oidcClientSecret = oidcClientSecret;
+        this.oidcRedirectPath = oidcRedirectPath;
+        this.oidcScope = oidcScope;
+        this.oidcCookieName = oidcCookieName;
+        this.oidcCookieSecure = oidcCookieSecure;
+        this.oidcPublicBaseUrl = oidcPublicBaseUrl;
+        this.authorizationEndpoint = authorizationEndpoint;
+        this.tokenEndpoint = tokenEndpoint;
     }
 
     /**
@@ -121,6 +168,17 @@ public final class JobRunnerAuthProperties {
             jwksUrl = issuerUrl + OPENID_CERTS_PATH;
         }
 
+        String oidcClientId = trimToNull(PropertyUtil.getPropertyValue(PROP_OIDC_CLIENT_ID, ""));
+        String oidcClientSecret = trimToNull(PropertyUtil.getPropertyValue(PROP_OIDC_CLIENT_SECRET, ""));
+        String oidcRedirectPath = PropertyUtil.getPropertyValue(PROP_OIDC_REDIRECT_PATH, DEFAULT_OIDC_REDIRECT_PATH);
+        String oidcScope = PropertyUtil.getPropertyValue(PROP_OIDC_SCOPE, DEFAULT_OIDC_SCOPE);
+        String oidcCookieName = PropertyUtil.getPropertyValue(PROP_OIDC_COOKIE_NAME, DEFAULT_OIDC_COOKIE_NAME);
+        boolean oidcCookieSecure =
+                PropertyUtil.getPropertyBooleanValue(PROP_OIDC_COOKIE_SECURE, DEFAULT_OIDC_COOKIE_SECURE);
+        String oidcPublicBaseUrl = trimToNull(PropertyUtil.getPropertyValue(PROP_OIDC_PUBLIC_BASE_URL, ""));
+        String authorizationEndpoint = issuerUrl == null ? null : issuerUrl + OPENID_AUTH_PATH;
+        String tokenEndpoint = issuerUrl == null ? null : issuerUrl + OPENID_TOKEN_PATH;
+
         JobRunnerAuthProperties props = new JobRunnerAuthProperties(
                 enabled,
                 issuerUrl,
@@ -132,7 +190,16 @@ public final class JobRunnerAuthProperties {
                 headerScheme,
                 jwksCacheTtlSeconds,
                 dashboardPort,
-                gatewayPort);
+                gatewayPort,
+                oidcClientId,
+                oidcClientSecret,
+                oidcRedirectPath,
+                oidcScope,
+                oidcCookieName,
+                oidcCookieSecure,
+                oidcPublicBaseUrl,
+                authorizationEndpoint,
+                tokenEndpoint);
 
         if (enabled) {
             props.validate();
@@ -149,6 +216,15 @@ public final class JobRunnerAuthProperties {
         if (gatewayPort == internalPort) {
             throw new ConfigurationException(
                     "'" + PROP_GATEWAY_PORT + "' must differ from 'jobs.dashboard.port' (" + internalPort + ")");
+        }
+        if ((oidcClientId == null) != (oidcClientSecret == null)) {
+            throw new ConfigurationException(
+                    "'" + PROP_OIDC_CLIENT_ID + "' and '" + PROP_OIDC_CLIENT_SECRET
+                            + "' must both be set together to enable browser login, or both left blank");
+        }
+        if (isBrowserLoginEnabled() && oidcPublicBaseUrl == null) {
+            throw new ConfigurationException("'" + PROP_OIDC_PUBLIC_BASE_URL
+                    + "' is required when browser login is enabled (oidc client id/secret set)");
         }
     }
 
@@ -206,5 +282,51 @@ public final class JobRunnerAuthProperties {
     /** The gateway's own bind port (jobs.dashboard.auth.port). */
     public int getGatewayPort() {
         return gatewayPort;
+    }
+
+    /** True when both {@code oidc.client.id} and {@code oidc.client.secret} are set. */
+    public boolean isBrowserLoginEnabled() {
+        return oidcClientId != null && oidcClientSecret != null;
+    }
+
+    public String getOidcClientId() {
+        return oidcClientId;
+    }
+
+    public String getOidcClientSecret() {
+        return oidcClientSecret;
+    }
+
+    /** Path the gateway treats as the OIDC callback, e.g. {@code /oauth2/callback}. */
+    public String getOidcRedirectPath() {
+        return oidcRedirectPath;
+    }
+
+    public String getOidcScope() {
+        return oidcScope;
+    }
+
+    /** Name of the cookie the access token is stored in after a successful browser login. */
+    public String getOidcCookieName() {
+        return oidcCookieName;
+    }
+
+    public boolean isOidcCookieSecure() {
+        return oidcCookieSecure;
+    }
+
+    /** Public URL the browser uses to reach the dashboard - used to build the redirect_uri. */
+    public String getOidcPublicBaseUrl() {
+        return oidcPublicBaseUrl;
+    }
+
+    /** Keycloak's authorization endpoint, derived from issuer.url. */
+    public String getAuthorizationEndpoint() {
+        return authorizationEndpoint;
+    }
+
+    /** Keycloak's token endpoint, derived from issuer.url. */
+    public String getTokenEndpoint() {
+        return tokenEndpoint;
     }
 }

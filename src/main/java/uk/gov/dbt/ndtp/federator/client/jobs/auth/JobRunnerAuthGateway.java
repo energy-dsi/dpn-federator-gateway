@@ -48,16 +48,25 @@ public class JobRunnerAuthGateway {
     private final JobRunnerAuthProperties config;
     private final BearerTokenVerifier verifier;
     private final URI upstreamBaseUri;
+    // Non-null only when jobs.dashboard.auth.oidc.client.id/secret are both configured - handles
+    // the browser login redirect/callback so no external login-proxy is required.
+    private final OidcLoginFlow oidcLoginFlow;
 
     private HttpServer httpServer;
     private ExecutorService executorService;
     private HttpClient httpClient;
 
     public JobRunnerAuthGateway(int publicPort, JobRunnerAuthProperties config, BearerTokenVerifier verifier) {
+        this(publicPort, config, verifier, null);
+    }
+
+    public JobRunnerAuthGateway(
+            int publicPort, JobRunnerAuthProperties config, BearerTokenVerifier verifier, OidcLoginFlow oidcLoginFlow) {
         this.publicPort = publicPort;
         this.config = config;
         this.verifier = verifier;
         this.upstreamBaseUri = URI.create("http://127.0.0.1:" + config.getInternalPort());
+        this.oidcLoginFlow = oidcLoginFlow;
     }
 
     public void start() {
@@ -95,10 +104,29 @@ public class JobRunnerAuthGateway {
 
     private void handle(HttpExchange exchange) {
         try {
-            AuthResult authResult = authenticate(exchange);
+            if (oidcLoginFlow != null && oidcLoginFlow.isCallback(exchange)) {
+                oidcLoginFlow.handleCallback(exchange);
+                return;
+            }
+
+            String headerToken = extractToken(firstHeader(exchange.getRequestHeaders(), config.getHeaderName()));
+            // A caller presenting no bearer header at all is treated as a browser: eligible for
+            // redirect-to-login (via a cookie, once logged in) rather than a bare 401. A caller
+            // that does present the header is treated as an API client - always a plain 401/403
+            // on failure, even when browser login is also configured.
+            boolean viaBrowserSession = headerToken == null && oidcLoginFlow != null;
+            String token = headerToken != null
+                    ? headerToken
+                    : (oidcLoginFlow != null ? OidcLoginFlow.readCookie(exchange, config.getOidcCookieName()) : null);
+
+            AuthResult authResult = verifier.verify(token);
             if (!authResult.authorized()) {
                 log.debug("Rejected Job Runner UI request from {}: {}", exchange.getRemoteAddress(), authResult.reason());
-                sendUnauthorized(exchange, authResult.reason());
+                if (viaBrowserSession) {
+                    oidcLoginFlow.redirectToLogin(exchange);
+                } else {
+                    sendUnauthorized(exchange, authResult.reason());
+                }
                 return;
             }
 
@@ -125,12 +153,6 @@ public class JobRunnerAuthGateway {
         } finally {
             exchange.close();
         }
-    }
-
-    private AuthResult authenticate(HttpExchange exchange) {
-        String headerValue = firstHeader(exchange.getRequestHeaders(), config.getHeaderName());
-        String token = extractToken(headerValue);
-        return verifier.verify(token);
     }
 
     private String extractToken(String headerValue) {

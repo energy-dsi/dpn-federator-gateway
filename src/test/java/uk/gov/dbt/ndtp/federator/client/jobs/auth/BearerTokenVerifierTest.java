@@ -85,7 +85,16 @@ class BearerTokenVerifierTest {
                 "Bearer",
                 300,
                 18085,
-                28085);
+                28085,
+                null,
+                null,
+                "/oauth2/callback",
+                "openid",
+                "jobrunr_at",
+                true,
+                null,
+                null,
+                null);
     }
 
     @Test
@@ -221,6 +230,26 @@ class BearerTokenVerifierTest {
 
         BearerTokenVerifier verifier =
                 new BearerTokenVerifier(propsWith(AUDIENCE, "dpnadmin", "dpnreader"), () -> httpClient);
+        AuthResult result = verifier.verify(signedToken(claims));
+
+        assertTrue(result.authorized());
+        assertEquals(AccessLevel.ADMIN, result.accessLevel());
+    }
+
+    @Test
+    void verify_adminRole_viaFlatRolesClaim_grantsAdminAccess() throws Exception {
+        // Some realms map realm roles onto a flat top-level "roles" claim instead of Keycloak's
+        // standard nested realm_access.roles (a custom protocol mapper choice).
+        stubJwksResponse();
+        JWTClaimsSet claims = new JWTClaimsSet.Builder()
+                .subject("alice")
+                .issuer(ISSUER)
+                .expirationTime(new Date(System.currentTimeMillis() + 60_000))
+                .claim("roles", List.of("dpnadmin", "other-role"))
+                .build();
+
+        BearerTokenVerifier verifier =
+                new BearerTokenVerifier(propsWith(null, "dpnadmin", "dpnreader"), () -> httpClient);
         AuthResult result = verifier.verify(signedToken(claims));
 
         assertTrue(result.authorized());
