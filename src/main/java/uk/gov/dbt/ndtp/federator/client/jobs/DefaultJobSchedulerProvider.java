@@ -270,10 +270,14 @@ public final class DefaultJobSchedulerProvider implements JobSchedulerProvider {
     /**
      * Builds the HttpClient trust source shared by the auth gateway's JWKS fetch and OIDC token
      * exchange - both need to trust the Keycloak issuer's TLS certificate, so both reuse whichever
-     * mTLS trust source the rest of the client already uses (Vault-sourced trust material, then
-     * {@code client.truststoreFilePath}). Returns null when neither is configured, so callers fall
-     * back to their own default (JDK trust store) - preserving prior behaviour for issuers with a
-     * publicly-trusted certificate (or plain HTTP, e.g. local testing).
+     * mTLS trust source the rest of the client already uses: Vault-sourced trust material, then
+     * {@code client.truststoreFilePath}, then the {@code jobs.dashboard.auth.trustStore*} system
+     * properties BearerTokenVerifier's own default constructor falls back to (see
+     * {@code BearerTokenVerifier.trustStoreSslContext()} - mirrored here so OidcLoginFlow's
+     * token-endpoint call gets that same isolated trust, not just the JWKS fetch). Returns null
+     * when none of these are configured, so callers fall back to their own default (JDK trust
+     * store) - preserving prior behaviour for issuers with a publicly-trusted certificate (or
+     * plain HTTP, e.g. local testing).
      */
     private Supplier<java.net.http.HttpClient> buildAuthHttpClientSupplier() {
         if (VaultTlsSupport.isVaultTlsEnabled()) {
@@ -283,14 +287,42 @@ public final class DefaultJobSchedulerProvider implements JobSchedulerProvider {
             return () -> httpClient;
         }
         String truststorePath = PropertyUtil.getPropertyValue(PROP_CLIENT_TRUSTSTORE_FILE_PATH, "");
-        if (truststorePath.isBlank()) {
+        if (!truststorePath.isBlank()) {
+            String truststorePassword = PropertyUtil.getPropertyValue(PROP_CLIENT_TRUSTSTORE_PASSWORD, "");
+            SSLContext sslContext = SSLUtils.createSSLContextWithTrustStore(truststorePath, truststorePassword);
+            java.net.http.HttpClient httpClient =
+                    java.net.http.HttpClient.newBuilder().sslContext(sslContext).build();
+            return () -> httpClient;
+        }
+        String authTrustStorePath = System.getProperty("jobs.dashboard.auth.trustStore");
+        if (authTrustStorePath == null) {
             return null;
         }
-        String truststorePassword = PropertyUtil.getPropertyValue(PROP_CLIENT_TRUSTSTORE_PASSWORD, "");
-        SSLContext sslContext = SSLUtils.createSSLContextWithTrustStore(truststorePath, truststorePassword);
+        SSLContext sslContext = authTrustStoreSslContext(authTrustStorePath);
         java.net.http.HttpClient httpClient =
                 java.net.http.HttpClient.newBuilder().sslContext(sslContext).build();
         return () -> httpClient;
+    }
+
+    private static SSLContext authTrustStoreSslContext(String trustStorePath) {
+        try {
+            String trustStoreType =
+                    System.getProperty("jobs.dashboard.auth.trustStoreType", java.security.KeyStore.getDefaultType());
+            String trustStorePassword = System.getProperty("jobs.dashboard.auth.trustStorePassword", "");
+            java.security.KeyStore trustStore = java.security.KeyStore.getInstance(trustStoreType);
+            try (var in = java.nio.file.Files.newInputStream(java.nio.file.Path.of(trustStorePath))) {
+                trustStore.load(in, trustStorePassword.toCharArray());
+            }
+            javax.net.ssl.TrustManagerFactory tmf =
+                    javax.net.ssl.TrustManagerFactory.getInstance(javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm());
+            tmf.init(trustStore);
+            SSLContext ctx = SSLContext.getInstance("TLS");
+            ctx.init(null, tmf.getTrustManagers(), null);
+            return ctx;
+        } catch (Exception e) {
+            throw new FederatorSslException(
+                    "Failed to build SSLContext from jobs.dashboard.auth.trustStore=" + trustStorePath, e);
+        }
     }
 
     private static SSLContext trustOnlySslContext(TrustManager[] trustManagers) {
