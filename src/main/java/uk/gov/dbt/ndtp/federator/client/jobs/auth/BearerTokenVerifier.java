@@ -65,20 +65,22 @@ public class BearerTokenVerifier {
     }
 
     /**
-     * Builds an SSLContext explicitly from the {@code javax.net.ssl.trustStore} system properties,
-     * rather than relying on {@link SSLContext#getDefault()}. This process also initialises gRPC
-     * and the OpenTelemetry SDK, either of which may touch the JVM-wide default SSLContext before
-     * this class ever runs; loading the configured trust store directly here removes that
-     * dependency on ambient JVM state.
+     * Builds an SSLContext from its own dedicated {@code jobs.dashboard.auth.trustStore*} system
+     * properties, rather than sharing the JVM-wide {@code javax.net.ssl.trustStore} (or its
+     * implicit default {@link SSLContext#getDefault()}). Kafka's own client takes the same
+     * approach - it never relies on the JVM-wide trust store either, pointing its
+     * {@code ssl.truststore.*} settings straight at its own file - which is why its OAuthBearer
+     * login isn't affected by whatever else in this process (gRPC, OpenTelemetry) touches shared
+     * JVM TLS state. This mirrors that isolation for the JWKS fetch here.
      */
     private static SSLContext trustStoreSslContext() {
-        String trustStorePath = System.getProperty("javax.net.ssl.trustStore");
+        String trustStorePath = System.getProperty("jobs.dashboard.auth.trustStore");
         try {
             if (trustStorePath == null) {
                 return SSLContext.getDefault();
             }
-            String trustStoreType = System.getProperty("javax.net.ssl.trustStoreType", KeyStore.getDefaultType());
-            String trustStorePassword = System.getProperty("javax.net.ssl.trustStorePassword", "");
+            String trustStoreType = System.getProperty("jobs.dashboard.auth.trustStoreType", KeyStore.getDefaultType());
+            String trustStorePassword = System.getProperty("jobs.dashboard.auth.trustStorePassword", "");
             KeyStore trustStore = KeyStore.getInstance(trustStoreType);
             try (InputStream in = Files.newInputStream(Path.of(trustStorePath))) {
                 trustStore.load(in, trustStorePassword.toCharArray());
@@ -89,7 +91,8 @@ public class BearerTokenVerifier {
             ctx.init(null, tmf.getTrustManagers(), null);
             return ctx;
         } catch (Exception e) {
-            throw new IllegalStateException("Failed to build SSLContext from javax.net.ssl.trustStore=" + trustStorePath, e);
+            throw new IllegalStateException(
+                    "Failed to build SSLContext from jobs.dashboard.auth.trustStore=" + trustStorePath, e);
         }
     }
 
