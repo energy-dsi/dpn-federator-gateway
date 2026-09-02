@@ -4,7 +4,11 @@
 
 package uk.gov.dbt.ndtp.federator.client.jobs;
 
+import java.security.cert.CertificateException;
+import java.security.cert.X509Certificate;
 import java.time.ZoneId;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -13,6 +17,7 @@ import java.util.function.Supplier;
 import javax.net.ssl.KeyManager;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManager;
+import javax.net.ssl.X509TrustManager;
 import lombok.extern.slf4j.Slf4j;
 import org.jobrunr.configuration.JobRunr;
 import org.jobrunr.jobs.RecurringJob;
@@ -281,7 +286,18 @@ public final class DefaultJobSchedulerProvider implements JobSchedulerProvider {
      */
     private Supplier<java.net.http.HttpClient> buildAuthHttpClientSupplier() {
         if (VaultTlsSupport.isVaultTlsEnabled()) {
-            SSLContext sslContext = trustOnlySslContext(VaultTlsSupport.trustManagers());
+            // Vault's trust material is scoped to federator's own internal gRPC mTLS PKI
+            // (node-net/client) - it does not necessarily include the CA that signs the Keycloak
+            // issuer's certificate (a separate cert-manager-issued chain). Merge in the dedicated
+            // jobs.dashboard.auth.trustStore CA (see BearerTokenVerifier.trustStoreSslContext(),
+            // populated from the same Kafka truststore secret in Azure) so this HttpClient trusts
+            // both destinations, rather than only whichever Vault happens to provide.
+            TrustManager[] trustManagers = VaultTlsSupport.trustManagers();
+            String authTrustStorePath = System.getProperty("jobs.dashboard.auth.trustStore");
+            if (authTrustStorePath != null) {
+                trustManagers = mergeTrustManagers(trustManagers, loadAuthTrustManagers(authTrustStorePath));
+            }
+            SSLContext sslContext = trustOnlySslContext(trustManagers);
             java.net.http.HttpClient httpClient =
                     java.net.http.HttpClient.newBuilder().sslContext(sslContext).build();
             return () -> httpClient;
@@ -298,13 +314,13 @@ public final class DefaultJobSchedulerProvider implements JobSchedulerProvider {
         if (authTrustStorePath == null) {
             return null;
         }
-        SSLContext sslContext = authTrustStoreSslContext(authTrustStorePath);
+        SSLContext sslContext = trustOnlySslContext(loadAuthTrustManagers(authTrustStorePath));
         java.net.http.HttpClient httpClient =
                 java.net.http.HttpClient.newBuilder().sslContext(sslContext).build();
         return () -> httpClient;
     }
 
-    private static SSLContext authTrustStoreSslContext(String trustStorePath) {
+    private static TrustManager[] loadAuthTrustManagers(String trustStorePath) {
         try {
             String trustStoreType =
                     System.getProperty("jobs.dashboard.auth.trustStoreType", java.security.KeyStore.getDefaultType());
@@ -316,13 +332,27 @@ public final class DefaultJobSchedulerProvider implements JobSchedulerProvider {
             javax.net.ssl.TrustManagerFactory tmf =
                     javax.net.ssl.TrustManagerFactory.getInstance(javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm());
             tmf.init(trustStore);
-            SSLContext ctx = SSLContext.getInstance("TLS");
-            ctx.init(null, tmf.getTrustManagers(), null);
-            return ctx;
+            return tmf.getTrustManagers();
         } catch (Exception e) {
             throw new FederatorSslException(
-                    "Failed to build SSLContext from jobs.dashboard.auth.trustStore=" + trustStorePath, e);
+                    "Failed to load trust managers from jobs.dashboard.auth.trustStore=" + trustStorePath, e);
         }
+    }
+
+    /** Combines two sets of trust managers so a certificate accepted by either is trusted. */
+    private static TrustManager[] mergeTrustManagers(TrustManager[] first, TrustManager[] second) {
+        List<X509TrustManager> delegates = new ArrayList<>();
+        for (TrustManager tm : first) {
+            if (tm instanceof X509TrustManager x509) {
+                delegates.add(x509);
+            }
+        }
+        for (TrustManager tm : second) {
+            if (tm instanceof X509TrustManager x509) {
+                delegates.add(x509);
+            }
+        }
+        return new TrustManager[] {new CompositeX509TrustManager(delegates)};
     }
 
     private static SSLContext trustOnlySslContext(TrustManager[] trustManagers) {
@@ -332,6 +362,54 @@ public final class DefaultJobSchedulerProvider implements JobSchedulerProvider {
             return sslContext;
         } catch (Exception e) {
             throw new FederatorSslException("Failed to create SSLContext from Vault trust material.", e);
+        }
+    }
+
+    /**
+     * Trusts a certificate chain if ANY of the wrapped trust managers accepts it - used to combine
+     * Vault-sourced trust material with the dedicated jobs.dashboard.auth.trustStore CA, since
+     * neither alone covers both federator's own internal PKI and the separate Keycloak issuer.
+     */
+    private static final class CompositeX509TrustManager implements X509TrustManager {
+        private final List<X509TrustManager> delegates;
+
+        CompositeX509TrustManager(List<X509TrustManager> delegates) {
+            this.delegates = delegates;
+        }
+
+        @Override
+        public void checkClientTrusted(X509Certificate[] chain, String authType) throws CertificateException {
+            for (X509TrustManager delegate : delegates) {
+                try {
+                    delegate.checkClientTrusted(chain, authType);
+                    return;
+                } catch (CertificateException ignored) {
+                    // try the next delegate
+                }
+            }
+            throw new CertificateException("No configured trust manager accepted the client certificate");
+        }
+
+        @Override
+        public void checkServerTrusted(X509Certificate[] chain, String authType) throws CertificateException {
+            for (X509TrustManager delegate : delegates) {
+                try {
+                    delegate.checkServerTrusted(chain, authType);
+                    return;
+                } catch (CertificateException ignored) {
+                    // try the next delegate
+                }
+            }
+            throw new CertificateException("No configured trust manager accepted the server certificate");
+        }
+
+        @Override
+        public X509Certificate[] getAcceptedIssuers() {
+            List<X509Certificate> all = new ArrayList<>();
+            for (X509TrustManager delegate : delegates) {
+                all.addAll(Arrays.asList(delegate.getAcceptedIssuers()));
+            }
+            return all.toArray(new X509Certificate[0]);
         }
     }
 
