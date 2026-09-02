@@ -4,6 +4,7 @@
 
 package uk.gov.dbt.ndtp.federator.client.jobs;
 
+import java.net.Socket;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
 import java.time.ZoneId;
@@ -16,7 +17,9 @@ import java.util.UUID;
 import java.util.function.Supplier;
 import javax.net.ssl.KeyManager;
 import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLEngine;
 import javax.net.ssl.TrustManager;
+import javax.net.ssl.X509ExtendedTrustManager;
 import javax.net.ssl.X509TrustManager;
 import lombok.extern.slf4j.Slf4j;
 import org.jobrunr.configuration.JobRunr;
@@ -369,8 +372,14 @@ public final class DefaultJobSchedulerProvider implements JobSchedulerProvider {
      * Trusts a certificate chain if ANY of the wrapped trust managers accepts it - used to combine
      * Vault-sourced trust material with the dedicated jobs.dashboard.auth.trustStore CA, since
      * neither alone covers both federator's own internal PKI and the separate Keycloak issuer.
+     * <p>
+     * Extends {@link X509ExtendedTrustManager} (not the plain {@link X509TrustManager}) - the
+     * modern {@code java.net.http.HttpClient} used here talks TLS via {@link javax.net.ssl.SSLEngine},
+     * and a plain {@code X509TrustManager} gets silently wrapped by the JDK in a way that can drop
+     * handshake context (e.g. SNI) the server needs to pick the right certificate, causing the
+     * server to abort the handshake outright rather than reject on a clean certificate error.
      */
-    private static final class CompositeX509TrustManager implements X509TrustManager {
+    private static final class CompositeX509TrustManager extends X509ExtendedTrustManager {
         private final List<X509TrustManager> delegates;
 
         CompositeX509TrustManager(List<X509TrustManager> delegates) {
@@ -379,28 +388,48 @@ public final class DefaultJobSchedulerProvider implements JobSchedulerProvider {
 
         @Override
         public void checkClientTrusted(X509Certificate[] chain, String authType) throws CertificateException {
-            for (X509TrustManager delegate : delegates) {
-                try {
-                    delegate.checkClientTrusted(chain, authType);
-                    return;
-                } catch (CertificateException ignored) {
-                    // try the next delegate
-                }
-            }
-            throw new CertificateException("No configured trust manager accepted the client certificate");
+            checkTrusted(delegate -> delegate.checkClientTrusted(chain, authType), "client");
         }
 
         @Override
         public void checkServerTrusted(X509Certificate[] chain, String authType) throws CertificateException {
-            for (X509TrustManager delegate : delegates) {
-                try {
-                    delegate.checkServerTrusted(chain, authType);
-                    return;
-                } catch (CertificateException ignored) {
-                    // try the next delegate
-                }
-            }
-            throw new CertificateException("No configured trust manager accepted the server certificate");
+            checkTrusted(delegate -> delegate.checkServerTrusted(chain, authType), "server");
+        }
+
+        @Override
+        public void checkClientTrusted(X509Certificate[] chain, String authType, Socket socket)
+                throws CertificateException {
+            checkTrusted(
+                    delegate -> extended(delegate).checkClientTrusted(chain, authType, socket),
+                    delegate -> delegate.checkClientTrusted(chain, authType),
+                    "client");
+        }
+
+        @Override
+        public void checkServerTrusted(X509Certificate[] chain, String authType, Socket socket)
+                throws CertificateException {
+            checkTrusted(
+                    delegate -> extended(delegate).checkServerTrusted(chain, authType, socket),
+                    delegate -> delegate.checkServerTrusted(chain, authType),
+                    "server");
+        }
+
+        @Override
+        public void checkClientTrusted(X509Certificate[] chain, String authType, SSLEngine engine)
+                throws CertificateException {
+            checkTrusted(
+                    delegate -> extended(delegate).checkClientTrusted(chain, authType, engine),
+                    delegate -> delegate.checkClientTrusted(chain, authType),
+                    "client");
+        }
+
+        @Override
+        public void checkServerTrusted(X509Certificate[] chain, String authType, SSLEngine engine)
+                throws CertificateException {
+            checkTrusted(
+                    delegate -> extended(delegate).checkServerTrusted(chain, authType, engine),
+                    delegate -> delegate.checkServerTrusted(chain, authType),
+                    "server");
         }
 
         @Override
@@ -410,6 +439,36 @@ public final class DefaultJobSchedulerProvider implements JobSchedulerProvider {
                 all.addAll(Arrays.asList(delegate.getAcceptedIssuers()));
             }
             return all.toArray(new X509Certificate[0]);
+        }
+
+        private static X509ExtendedTrustManager extended(X509TrustManager delegate) {
+            return (X509ExtendedTrustManager) delegate;
+        }
+
+        private void checkTrusted(CertCheck extendedCheck, CertCheck basicCheck, String kind)
+                throws CertificateException {
+            for (X509TrustManager delegate : delegates) {
+                try {
+                    if (delegate instanceof X509ExtendedTrustManager) {
+                        extendedCheck.run(delegate);
+                    } else {
+                        basicCheck.run(delegate);
+                    }
+                    return;
+                } catch (CertificateException ignored) {
+                    // try the next delegate
+                }
+            }
+            throw new CertificateException("No configured trust manager accepted the " + kind + " certificate");
+        }
+
+        private void checkTrusted(CertCheck check, String kind) throws CertificateException {
+            checkTrusted(check, check, kind);
+        }
+
+        @FunctionalInterface
+        private interface CertCheck {
+            void run(X509TrustManager delegate) throws CertificateException;
         }
     }
 
