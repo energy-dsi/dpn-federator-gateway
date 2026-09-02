@@ -101,6 +101,16 @@ public class GRPCUtils {
      * common-configuration.properties file, under the "redis.idp." property prefix instead of
      * "idp." - no second properties file is used.
      * </p>
+     * <p>
+     * Uses plain client-secret authentication (no mTLS) since the redis-gating client doesn't
+     * have its own client certificate provisioned - {@code IdpTokenServiceMtlsImpl}'s request
+     * body already sent the client secret over the wire regardless, so mTLS added transport-level
+     * overhead without adding real auth strength here, and it silently reused the "idp."-prefixed
+     * mTLS keystore/truststore since {@code createHttpClientWithMtls} always reads that specific
+     * prefix. This uses the prefix-aware {@link HttpClientFactoryUtils#createHttpClient(Properties, String)}
+     * instead, which reads "redis.idp.truststore.*" first, falling back to "idp.truststore.*" only
+     * if no dedicated truststore is configured for this client.
+     * </p>
      */
     public static IdpTokenService createRedisIdpTokenService() {
         Properties properties = PropertyUtil.getPropertiesFromFilePath(COMMON_CONFIG_PROPERTIES);
@@ -109,9 +119,9 @@ public class GRPCUtils {
         SecretProvider secretProvider = PropertyUtil.createSecretProvider(properties);
         PropertyUtil.overrideWithSecrets(properties, secretProvider);
 
-        LOGGER.info("Redis-gating IDP token service using dedicated Keycloak client (mtls, prefix='redis.idp.')");
-        Supplier<HttpClient> clientSupplier = () -> HttpClientFactoryUtils.createHttpClientWithMtls(properties);
-        return new IdpTokenServiceMtlsImpl(clientSupplier, mapper, "redis.idp.");
+        LOGGER.info("Redis-gating IDP token service using dedicated Keycloak client (client_secret, prefix='redis.idp.')");
+        Supplier<HttpClient> clientSupplier = () -> HttpClientFactoryUtils.createHttpClient(properties, "redis.idp.");
+        return new IdpTokenServiceClientSecretImpl(clientSupplier, mapper, "redis.idp.");
     }
 
     /**

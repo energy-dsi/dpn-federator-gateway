@@ -153,16 +153,15 @@ public class GRPCServer implements AutoCloseable {
         // even if auth later rejects the call.
         //  GrpcTelemetry grpcTelemetry = GrpcTelemetry.create(OpenTelemetryConfig.get()); // DISABLED: NoClassDefFoundError NetworkAttributes
 
-        // AuthServerInterceptor (Bearer-token gRPC authentication) is gated by
-        // KeycloakAuthConfig.isEnabled() - local development testing only, see that class.
-        // Every other interceptor always runs regardless of the switch.
+        // keycloak.auth.enabled controls ONLY Redis (KeycloakSessionGuard gating and Redis TLS -
+        // see RedisUtil). gRPC-level authentication (this interceptor chain) is intentionally
+        // NOT affected by that switch and always runs, matching this service's original,
+        // pre-switch behaviour.
         List<ServerInterceptor> interceptors = new ArrayList<>();
         interceptors.add(new ConsumerVerificationServerInterceptor(tokenService, commonProperties));
-        if (KeycloakAuthConfig.isEnabled()) {
-            interceptors.add(new AuthServerInterceptor(tokenService));
-        }
-        interceptors.add(new CustomServerInterceptor());
+        interceptors.add(new AuthServerInterceptor(tokenService));
         interceptors.add(new OcspServerInterceptor(tokenService, ocspService));
+        interceptors.add(new CustomServerInterceptor());
 
         return builder.executor(ThreadUtil.threadExecutor(GRPC_SERVER))
                 .keepAliveTime(PropertyUtil.getPropertyIntValue(SERVER_KEEP_ALIVE_TIME, FIVE), TimeUnit.SECONDS)

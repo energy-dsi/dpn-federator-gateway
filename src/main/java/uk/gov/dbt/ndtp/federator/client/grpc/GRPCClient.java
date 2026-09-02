@@ -44,7 +44,6 @@ import uk.gov.dbt.ndtp.federator.client.grpc.interceptor.CustomClientInterceptor
 import uk.gov.dbt.ndtp.federator.common.service.idp.IdpTokenService;
 // import uk.gov.dbt.ndtp.federator.common.telemetry.OpenTelemetryConfig;
 import uk.gov.dbt.ndtp.federator.common.utils.GRPCUtils;
-import uk.gov.dbt.ndtp.federator.common.utils.KeycloakAuthConfig;
 import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
 
 public interface GRPCClient extends AutoCloseable {
@@ -90,13 +89,13 @@ public interface GRPCClient extends AutoCloseable {
         // W3C trace context into gRPC metadata automatically.
         // GrpcTelemetry grpcTelemetry = GrpcTelemetry.create(OpenTelemetryConfig.get()); // DISABLED: NoClassDefFoundError NetworkAttributes
 
-        // AuthClientInterceptor (Bearer-token gRPC authentication) is gated by
-        // KeycloakAuthConfig.isEnabled() - local development testing only, see that class.
+        // keycloak.auth.enabled controls ONLY Redis (KeycloakSessionGuard gating and Redis TLS -
+        // see RedisUtil). gRPC-level authentication (this interceptor) is intentionally NOT
+        // affected by that switch and always runs, matching this service's original,
+        // pre-switch behaviour.
         List<ClientInterceptor> interceptors = new ArrayList<>();
         interceptors.add(new CustomClientInterceptor());
-        if (KeycloakAuthConfig.isEnabled()) {
-            interceptors.add(new AuthClientInterceptor(tokenService));
-        }
+        interceptors.add(new AuthClientInterceptor(tokenService));
 
         return builder.keepAliveTime(PropertyUtil.getPropertyIntValue(CLIENT_KEEP_ALIVE_TIME, THIRTY), TimeUnit.SECONDS)
                 .keepAliveTimeout(PropertyUtil.getPropertyIntValue(CLIENT_KEEP_ALIVE_TIMEOUT, TEN), TimeUnit.SECONDS)

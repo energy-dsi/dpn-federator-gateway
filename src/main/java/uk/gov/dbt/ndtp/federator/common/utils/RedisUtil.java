@@ -26,6 +26,7 @@
 
 package uk.gov.dbt.ndtp.federator.common.utils;
 
+import java.util.Properties;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLParameters;
 import org.slf4j.Logger;
@@ -63,6 +64,14 @@ public class RedisUtil {
     public static final String REDIS_AES_KEY = "redis.aes.key";
     public static final String LOCALHOST = "localhost";
     public static final String DEFAULT_PORT = "6379";
+
+    /**
+     * Same key used elsewhere (e.g. {@code IdpTokenServiceMtlsImpl}, {@code GRPCUtils}) to look up
+     * the path to the shared common-configuration.properties file from the main properties file.
+     * redis.tls.enabled / redis.truststore.path / redis.truststore.password live there since they
+     * are identical for both federator-server and federator-client - see common-configuration.properties.
+     */
+    private static final String COMMON_CONFIG_PROPERTIES = "common.configuration";
     public static final String TRUE = "true";
     public static final Logger LOGGER = LoggerFactory.getLogger("RedisUtil");
     private static RedisUtil instance;
@@ -94,13 +103,26 @@ public class RedisUtil {
             LOGGER.info("Using Redis Host - '{}'", host);
             int port = PropertyUtil.getPropertyIntValue(REDIS_PORT, DEFAULT_PORT);
             LOGGER.info("Using Redis on Port - '{}'", port);
-            boolean isTLSEnabled = PropertyUtil.getPropertyBooleanValue(REDIS_TLS_ENABLED, TRUE);
+
+            // redis.tls.enabled / redis.truststore.path / redis.truststore.password are identical
+            // for federator-server and federator-client, so they live once in
+            // common-configuration.properties rather than being duplicated in each role's main
+            // properties file.
+            Properties commonProperties = PropertyUtil.getPropertiesFromFilePath(COMMON_CONFIG_PROPERTIES);
+            boolean isTLSEnabled = Boolean.parseBoolean(commonProperties.getProperty(REDIS_TLS_ENABLED, TRUE));
+
+            // Redis TLS is controlled SOLELY by redis.tls.enabled and is completely independent
+            // of keycloak.auth.enabled - Redis TLS is always implemented regardless of the
+            // switch's value. Only getKeycloakGatedInstance()'s authentication step (the
+            // Keycloak session check) is affected by that switch, not TLS. See
+            // KeycloakAuthConfig's Javadoc for the full, current scope of that flag.
             LOGGER.info("Using TLS with Redis - '{}'", isTLSEnabled);
             LOGGER.info("Redis-native username/password authentication is disabled; "
                     + "access control is enforced by the Keycloak gate at the application layer.");
 
-            String truststorePath = PropertyUtil.getPropertyValue(REDIS_TRUSTSTORE_PATH, "");
-            String truststorePassword = PropertyUtil.getPropertyValue(REDIS_TRUSTSTORE_PASSWORD, "");
+            String truststorePath = isTLSEnabled ? commonProperties.getProperty(REDIS_TRUSTSTORE_PATH, "") : "";
+            String truststorePassword =
+                    isTLSEnabled ? commonProperties.getProperty(REDIS_TRUSTSTORE_PASSWORD, "") : "";
 
             instance = new RedisUtil(buildRedisConnection(host, port, isTLSEnabled, truststorePath, truststorePassword));
         }

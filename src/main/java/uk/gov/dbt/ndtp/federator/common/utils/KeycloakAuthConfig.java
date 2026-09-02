@@ -7,9 +7,20 @@ import java.util.Properties;
 import lombok.extern.slf4j.Slf4j;
 
 /**
- * Master switch controlling whether Keycloak authentication is enforced across the federator -
- * both for gRPC calls (see {@code AuthServerInterceptor} / {@code AuthClientInterceptor}) and
- * for Redis access (see {@code RedisUtil.getKeycloakGatedInstance()} / {@code KeycloakSessionGuard}).
+ * Master switch controlling ONLY whether Redis access is gated behind a valid Keycloak session
+ * (see {@code KeycloakSessionGuard}), via {@code RedisUtil.getKeycloakGatedInstance()}.
+ * <p>
+ * <strong>Redis TLS is always implemented, in both switch states.</strong> Redis wire-level
+ * TLS (see {@code RedisUtil.getInstance()}) is controlled solely by {@code redis.tls.enabled}
+ * and is completely independent of this flag - turning this switch off never disables TLS.
+ * </p>
+ * <p>
+ * gRPC-level authentication ({@code AuthServerInterceptor}, {@code AuthClientInterceptor},
+ * {@code ConsumerVerificationServerInterceptor}, {@code OcspServerInterceptor}) is also
+ * <strong>intentionally unaffected</strong> by this flag and always runs, regardless of its
+ * value - gRPC calls are always authenticated. Only the Keycloak authentication step for Redis
+ * access is ever bypassed by this switch - nothing else.
+ * </p>
  * <p>
  * Reads {@code keycloak.auth.enabled} from common-configuration.properties. Defaults to TRUE
  * (secure by default) if the property is absent or blank, and ALSO defaults to TRUE if the
@@ -46,8 +57,10 @@ public final class KeycloakAuthConfig {
             boolean enabled = Boolean.parseBoolean(value.trim());
             if (!enabled) {
                 log.warn(
-                        "keycloak.auth.enabled=false - gRPC calls will NOT be authenticated and Redis access "
-                                + "will NOT be gated. This should never be set to false outside local development testing.");
+                        "keycloak.auth.enabled=false - Redis access will NOT require a Keycloak session. "
+                                + "Redis TLS is unaffected and remains governed solely by redis.tls.enabled. "
+                                + "gRPC calls are also unaffected and remain authenticated as normal. "
+                                + "This should never be set to false outside local development testing.");
             }
             return enabled;
         } catch (Exception e) {

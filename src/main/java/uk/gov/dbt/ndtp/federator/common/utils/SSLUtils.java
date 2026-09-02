@@ -201,7 +201,7 @@ public class SSLUtils {
     /**
      * Loads a truststore from the given bytes, auto-detecting whether its actual on-disk format
      * is JKS or PKCS12. Modern {@code keytool} produces PKCS12-format files by default even when
-     * given a ".jks" filename/extension, so a truststore genuinely named "truststore.jks" may
+     * given a ".jks" filename/extension, so a truststore genuinely named "truststore.jks.backup" may
      * not actually be in JKS format. Tries JKS first (for genuinely older JKS files), falling
      * back to PKCS12.
      *
