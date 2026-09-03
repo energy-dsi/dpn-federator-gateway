@@ -128,6 +128,29 @@ class GRPCUtilsTest {
     }
 
     @Test
+    void testCreateRedisIdpTokenService_UsesClientSecretNotMtls() throws Exception {
+        Properties props = new Properties();
+        props.setProperty("redis.idp.token.url", "https://keycloak.example.com/realms/test/protocol/openid-connect/token");
+        props.setProperty("redis.idp.jwks.url", "https://keycloak.example.com/realms/test/protocol/openid-connect/certs");
+        props.setProperty("redis.idp.client.id", "dpn-service-client");
+        props.setProperty("redis.idp.client.secret", "test-secret");
+        writeCommonConfig("common_redis_idp.properties", props);
+
+        try (MockedStatic<HttpClientFactoryUtils> factoryMock = mockStatic(HttpClientFactoryUtils.class)) {
+            factoryMock
+                    .when(() -> HttpClientFactoryUtils.createHttpClient(any(), eq("redis.idp.")))
+                    .thenReturn(mock(java.net.http.HttpClient.class));
+
+            IdpTokenService service = GRPCUtils.createRedisIdpTokenService();
+
+            assertTrue(service instanceof IdpTokenServiceClientSecretImpl);
+            // Must NOT use the mTLS-transport factory method - that reads the "idp."-prefixed
+            // keystore/truststore unconditionally, which would be the wrong client's material.
+            factoryMock.verify(() -> HttpClientFactoryUtils.createHttpClientWithMtls(any()), never());
+        }
+    }
+
+    @Test
     void testCreateIdpTokenService_PrivateKeyJwt_ExplicitMode() throws Exception {
         Properties props = new Properties();
         props.setProperty("idp.auth.mode", "private_key_jwt");

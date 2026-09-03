@@ -40,6 +40,7 @@ import uk.gov.dbt.ndtp.federator.client.jobs.handlers.ClientDynamicConfigJob;
 import uk.gov.dbt.ndtp.federator.common.management.ManagementNodeDataHandler;
 import uk.gov.dbt.ndtp.federator.common.service.config.ConsumerConfigService;
 import uk.gov.dbt.ndtp.federator.common.service.idp.IdpTokenService;
+import uk.gov.dbt.ndtp.federator.common.utils.KeycloakSessionGuard;
 import uk.gov.dbt.ndtp.federator.common.service.ocsp.OcspCertificateVerificationService;
 import uk.gov.dbt.ndtp.federator.common.service.ocsp.OcspCertificateVerificationServiceImpl;
 import uk.gov.dbt.ndtp.federator.common.service.secret.SecretProvider;
@@ -163,6 +164,8 @@ public class FederatorClient {
         final ObjectMapper mapper = ObjectMapperUtil.getInstance();
 
         final IdpTokenService tokenService = GRPCUtils.createIdpTokenService();
+        final IdpTokenService redisIdpTokenService = GRPCUtils.createRedisIdpTokenService();
+        KeycloakSessionGuard.configure(redisIdpTokenService::fetchToken);
         final ManagementNodeDataHandler handler = new ManagementNodeDataHandler(httpClientSupplier, mapper, tokenService);
         final InMemoryConfigurationStore store = InMemoryConfigurationStore.getInstance();
         LOGGER.info(LOG_SERVICE);

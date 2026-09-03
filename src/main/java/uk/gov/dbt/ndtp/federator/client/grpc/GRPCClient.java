@@ -29,10 +29,13 @@ package uk.gov.dbt.ndtp.federator.client.grpc;
 import static uk.gov.dbt.ndtp.federator.common.utils.GRPCUtils.*;
 
 import io.grpc.ChannelCredentials;
+import io.grpc.ClientInterceptor;
 import io.grpc.Grpc;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 // import io.opentelemetry.instrumentation.grpc.v1_6.GrpcTelemetry;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -85,11 +88,18 @@ public interface GRPCClient extends AutoCloseable {
         // DSI EDIT: GrpcTelemetry creates a real OTel span per outgoing call and injects the
         // W3C trace context into gRPC metadata automatically.
         // GrpcTelemetry grpcTelemetry = GrpcTelemetry.create(OpenTelemetryConfig.get()); // DISABLED: NoClassDefFoundError NetworkAttributes
+
+        // keycloak.auth.enabled controls ONLY Redis (KeycloakSessionGuard gating and Redis TLS -
+        // see RedisUtil). gRPC-level authentication (this interceptor) is intentionally NOT
+        // affected by that switch and always runs, matching this service's original,
+        // pre-switch behaviour.
+        List<ClientInterceptor> interceptors = new ArrayList<>();
+        interceptors.add(new CustomClientInterceptor());
+        interceptors.add(new AuthClientInterceptor(tokenService));
+
         return builder.keepAliveTime(PropertyUtil.getPropertyIntValue(CLIENT_KEEP_ALIVE_TIME, THIRTY), TimeUnit.SECONDS)
                 .keepAliveTimeout(PropertyUtil.getPropertyIntValue(CLIENT_KEEP_ALIVE_TIMEOUT, TEN), TimeUnit.SECONDS)
                 .idleTimeout(PropertyUtil.getPropertyIntValue(CLIENT_IDLE_TIMEOUT, TEN), TimeUnit.SECONDS)
-                .intercept(
-                        new CustomClientInterceptor(),
-                        new AuthClientInterceptor(tokenService));
+                .intercept(interceptors);
     }
 }
