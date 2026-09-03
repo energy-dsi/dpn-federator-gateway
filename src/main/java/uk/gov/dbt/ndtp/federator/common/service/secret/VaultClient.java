@@ -72,13 +72,18 @@ public class VaultClient {
 
         this.authConfig = authConfig;
 
-        // Load truststore manually
-        KeyStore trustStore = KeyStore.getInstance(KEYSTORE_TYPE_JKS);
-
-        try (FileInputStream fis = new FileInputStream(trustStorePath)) {
-            trustStore.load(fis, trustStorePassword.toCharArray());
-        } catch (Exception e) {
-            trustStore = null;
+        // Load truststore manually. Try PKCS12 first - cert-manager/Vault-provisioned truststore
+        // files in this environment are commonly PKCS12 on disk despite a ".jks" name/extension
+        // (matching the JDK's own cacerts default format since Java 9) - then fall back to JKS
+        // for backwards compatibility with any genuinely JKS-format truststore.
+        KeyStore trustStore = loadTrustStore(trustStorePath, trustStorePassword, "PKCS12");
+        if (trustStore == null) {
+            trustStore = loadTrustStore(trustStorePath, trustStorePassword, KEYSTORE_TYPE_JKS);
+        }
+        if (trustStore == null) {
+            LOGGER.warn(
+                    "Could not load Vault truststore from '{}' as PKCS12 or JKS; falling back to the JVM's default trust store",
+                    trustStorePath);
         }
 
         // Configure SSL for Vault
@@ -104,6 +109,17 @@ public class VaultClient {
 
         this.renewalManager = new VaultTokenRenewalManager(this.vault, this.vaultConfig, authConfig);
         this.renewalManager.start();
+    }
+
+    /** @return the loaded truststore, or {@code null} if it can't be read as the given type. */
+    private static KeyStore loadTrustStore(String trustStorePath, String trustStorePassword, String storeType) {
+        try (FileInputStream fis = new FileInputStream(trustStorePath)) {
+            KeyStore trustStore = KeyStore.getInstance(storeType);
+            trustStore.load(fis, trustStorePassword.toCharArray());
+            return trustStore;
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     /**

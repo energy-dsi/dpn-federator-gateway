@@ -109,8 +109,16 @@ public final class HttpsDashboardProxy {
         public void handle(HttpExchange exchange) {
             try {
                 URI upstreamUri = URI.create(upstreamBaseUrl + exchange.getRequestURI());
-                HttpRequest.Builder builder =
-                        HttpRequest.newBuilder(upstreamUri).timeout(Duration.ofSeconds(30));
+                HttpRequest.Builder builder = HttpRequest.newBuilder(upstreamUri);
+                // JobRunr's SSE endpoints stream events for as long as the browser tab stays open -
+                // potentially many minutes with no data at all while idle - so the normal 30s
+                // request timeout (which covers the whole exchange, not just connecting) would
+                // forcibly cut every SSE connection at exactly 30s regardless of network health,
+                // tearing down the response being streamed back to the browser too ("Broken pipe").
+                // Every other request still gets the 30s safety net.
+                if (!exchange.getRequestURI().getPath().startsWith("/sse/")) {
+                    builder.timeout(Duration.ofSeconds(30));
+                }
 
                 exchange.getRequestHeaders().forEach((name, values) -> {
                     if (!HOP_BY_HOP_REQUEST_HEADERS.contains(name.toLowerCase(Locale.ROOT))) {
