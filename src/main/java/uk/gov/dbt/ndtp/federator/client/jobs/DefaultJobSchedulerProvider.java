@@ -9,6 +9,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.function.Supplier;
+import javax.net.ssl.KeyManager;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.TrustManager;
 import lombok.extern.slf4j.Slf4j;
 import org.jobrunr.configuration.JobRunr;
 import org.jobrunr.jobs.RecurringJob;
@@ -16,10 +20,17 @@ import org.jobrunr.scheduling.JobScheduler;
 import org.jobrunr.scheduling.RecurringJobBuilder;
 import org.jobrunr.storage.AbstractStorageProvider;
 import org.jobrunr.storage.InMemoryStorageProvider;
+import uk.gov.dbt.ndtp.federator.client.jobs.auth.BearerTokenVerifier;
+import uk.gov.dbt.ndtp.federator.client.jobs.auth.JobRunnerAuthGateway;
+import uk.gov.dbt.ndtp.federator.client.jobs.auth.JobRunnerAuthProperties;
+import uk.gov.dbt.ndtp.federator.client.jobs.auth.OidcLoginFlow;
 import uk.gov.dbt.ndtp.federator.client.jobs.params.JobParams;
 import uk.gov.dbt.ndtp.federator.client.jobs.params.RecurrentJobRequest;
 import uk.gov.dbt.ndtp.federator.client.lifecycle.ShutdownThread;
+import uk.gov.dbt.ndtp.federator.common.service.secret.VaultTlsSupport;
 import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
+import uk.gov.dbt.ndtp.federator.common.utils.SSLUtils;
+import uk.gov.dbt.ndtp.federator.exceptions.FederatorSslException;
 
 /**
  * Singleton provider to configure and manage the lifecycle of JobRunr background job scheduler.
@@ -37,8 +48,28 @@ import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
  *   <li>jobs.dashboard.enabled = true</li>
  *   <li>jobs.background.enabled = true</li>
  *   <li>jobs.storage.provider = memory</li>
+ *   <li>jobs.dashboard.https.enabled = false - fronts the dashboard with HTTPS via
+ *       {@link HttpsDashboardProxy} (JobRunr's own dashboard has no TLS support). When enabled,
+ *       jobs.dashboard.https.port is the one actually exposed publicly. Note: JobRunr's OSS
+ *       dashboard still binds jobs.dashboard.port on 0.0.0.0 (no bind-address option), so any port
+ *       that isn't meant to be public must be enforced as internal-only at the network layer
+ *       (firewall / do not expose the port / NetworkPolicy) - a proxy's TLS or auth check in front
+ *       of it is bypassable otherwise.</li>
+ *   <li>jobs.dashboard.https.port = 8443</li>
+ *   <li>jobs.dashboard.https.certFilePath / jobs.dashboard.https.keyFilePath - required when https enabled</li>
+ *   <li>jobs.dashboard.auth.enabled = false - fronts the dashboard with Keycloak-issued bearer
+ *       token verification via {@link uk.gov.dbt.ndtp.federator.client.jobs.auth.JobRunnerAuthGateway},
+ *       listening on its own jobs.dashboard.auth.port and forwarding to jobs.dashboard.port (which
+ *       never moves). See {@link uk.gov.dbt.ndtp.federator.client.jobs.auth.JobRunnerAuthProperties}
+ *       for the full set of related properties.</li>
  * </ul>
  * Currently only the in-memory storage provider is supported without additional dependencies.
+ * </p>
+ * <p>
+ * When both jobs.dashboard.https.enabled and jobs.dashboard.auth.enabled are true, the two are
+ * chained: the HTTPS proxy (public) forwards to the auth gateway, which forwards to the plain
+ * dashboard (innermost). When only one is enabled, that component's own port is the public entry
+ * point fronting the dashboard directly.
  * </p>
  */
 @Slf4j
@@ -51,12 +82,26 @@ public final class DefaultJobSchedulerProvider implements JobSchedulerProvider {
     private static final String PROP_DASHBOARD_PORT = "jobs.dashboard.port";
     private static final String PROP_BACKGROUND_ENABLED = "jobs.background.enabled";
     private static final String PROP_STORAGE_PROVIDER = "jobs.storage.provider"; // memory (default), future: redis, sql
+    // JobRunr's dashboard has no TLS support of its own (see HttpsDashboardProxy), so when enabled
+    // jobs.dashboard.port becomes an internal-only port and this proxy fronts it with HTTPS.
+    private static final String PROP_DASHBOARD_HTTPS_ENABLED = "jobs.dashboard.https.enabled";
+    private static final String PROP_DASHBOARD_HTTPS_PORT = "jobs.dashboard.https.port";
+    private static final String PROP_DASHBOARD_HTTPS_CERT_FILE_PATH = "jobs.dashboard.https.certFilePath";
+    private static final String PROP_DASHBOARD_HTTPS_KEY_FILE_PATH = "jobs.dashboard.https.keyFilePath";
+    // Reused (not duplicated) so the auth gateway's JWKS fetch trusts whatever internal CA the
+    // client's own mTLS truststore already trusts - e.g. an in-cluster Keycloak issuer signed by a
+    // private CA that the JDK default trust store wouldn't otherwise recognise.
+    private static final String PROP_CLIENT_TRUSTSTORE_FILE_PATH = "client.truststoreFilePath";
+    private static final String PROP_CLIENT_TRUSTSTORE_PASSWORD = "client.truststorePassword";
     private final Object lifecycleLock = new Object();
     private boolean started = false;
     // Keep reference so we can close when stopping (for in-memory case)
     private AbstractStorageProvider storageProvider;
     private JobScheduler jobScheduler;
     private RecurringJobsAccess recurringJobsAccess;
+    private HttpsDashboardProxy httpsDashboardProxy;
+    // Present only when jobs.dashboard.auth.enabled=true; fronts the dashboard with Keycloak auth
+    private JobRunnerAuthGateway authGateway;
 
     public DefaultJobSchedulerProvider() {
         // public constructor; instantiate and call ensureStarted() when needed
@@ -119,22 +164,64 @@ public final class DefaultJobSchedulerProvider implements JobSchedulerProvider {
                 recurringJobsAccess = defaultAccess();
             }
 
+            JobRunnerAuthProperties authProperties =
+                    dashboardEnabled ? JobRunnerAuthProperties.load(dashboardPort) : null;
+            boolean dashboardAuthEnabled = authProperties != null && authProperties.isEnabled();
+
             var cfg = JobRunr.configure().useStorageProvider(storageProvider);
             if (backgroundEnabled) {
                 cfg = cfg.useBackgroundJobServer();
             }
             if (dashboardEnabled) {
+                // SECURITY: JobRunr's OSS dashboard server binds 0.0.0.0 (its configuration API
+                // exposes only a port, no bind address), so dashboardPort is reachable on every
+                // interface regardless of what fronts it. This is a DEPLOYMENT responsibility that
+                // code cannot enforce: in Kubernetes do not list dashboardPort (or the auth
+                // gateway's own port, when enabled) in the Service/container ports (and add a
+                // NetworkPolicy); on a bare VM, firewall it. Only the outermost enabled layer
+                // (HTTPS proxy, then auth gateway, then the dashboard itself) should ever be public.
                 cfg = cfg.useDashboard(dashboardPort);
             }
             jobScheduler = cfg.initialize().getJobScheduler();
 
+            if (dashboardAuthEnabled) {
+                OidcLoginFlow oidcLoginFlow = buildOidcLoginFlow(authProperties);
+                authGateway = new JobRunnerAuthGateway(
+                        authProperties.getGatewayPort(),
+                        authProperties,
+                        buildBearerTokenVerifier(authProperties),
+                        oidcLoginFlow);
+                authGateway.start();
+                log.info(
+                        "Job Runner UI Keycloak authentication enabled (gateway on port {}, forwarding to dashboard"
+                                + " port {}, browserLogin={})",
+                        authProperties.getGatewayPort(),
+                        dashboardPort,
+                        oidcLoginFlow != null);
+            }
+
+            boolean dashboardHttpsEnabled = dashboardEnabled
+                    && PropertyUtil.getPropertyBooleanValue(PROP_DASHBOARD_HTTPS_ENABLED, "false");
+            if (dashboardHttpsEnabled) {
+                int httpsPort = PropertyUtil.getPropertyIntValue(PROP_DASHBOARD_HTTPS_PORT, "8443");
+                String certFilePath = PropertyUtil.getPropertyValue(PROP_DASHBOARD_HTTPS_CERT_FILE_PATH);
+                String keyFilePath = PropertyUtil.getPropertyValue(PROP_DASHBOARD_HTTPS_KEY_FILE_PATH);
+                KeyManager[] keyManagers = SSLUtils.createKeyManagerFromPem(certFilePath, keyFilePath);
+                // Chain to the auth gateway when it's also enabled, otherwise straight to the dashboard.
+                int httpsUpstreamPort = dashboardAuthEnabled ? authProperties.getGatewayPort() : dashboardPort;
+                httpsDashboardProxy = new HttpsDashboardProxy(httpsPort, httpsUpstreamPort, keyManagers);
+                httpsDashboardProxy.start();
+            }
+
             started = true;
 
             log.info(
-                    "JobRunr initialised (storage={}, background={}, dashboard={})",
+                    "JobRunr initialised (storage={}, background={}, dashboard={}, dashboardHttps={}, dashboardAuth={})",
                     CONSTANT_PROVIDER_TYPE_MEMORY,
                     backgroundEnabled,
-                    dashboardEnabled);
+                    dashboardEnabled,
+                    dashboardHttpsEnabled,
+                    dashboardAuthEnabled);
 
             // Register a shutdown task
             ShutdownThread.register(() -> {
@@ -144,7 +231,141 @@ public final class DefaultJobSchedulerProvider implements JobSchedulerProvider {
         }
     }
 
+    /**
+     * Builds the JWKS-fetching {@link BearerTokenVerifier} for the auth gateway, reusing whichever
+     * mTLS trust source the rest of the client already uses to trust the Keycloak issuer's TLS
+     * certificate - required when the issuer is signed by a private/internal CA (e.g. an in-cluster
+     * hostname) that the JDK default trust store wouldn't otherwise recognise. Mirrors the same
+     * {@code VaultTlsSupport.isVaultTlsEnabled()} switch used by {@link uk.gov.dbt.ndtp.federator.common.utils.GRPCUtils}
+     * and {@link uk.gov.dbt.ndtp.federator.common.utils.HttpClientFactoryUtils}: when Vault-sourced
+     * TLS is enabled, trust material is built in memory from Vault (no keystore files on disk -
+     * required in environments where there is no SMB/EFS file share to mount); otherwise it falls
+     * back to {@code client.truststoreFilePath}, and to the JDK default trust store when that's
+     * unset - preserving prior behaviour for issuers with a publicly-trusted certificate (or plain
+     * HTTP, e.g. local testing).
+     */
+    private BearerTokenVerifier buildBearerTokenVerifier(JobRunnerAuthProperties authProperties) {
+        Supplier<java.net.http.HttpClient> supplier = buildAuthHttpClientSupplier();
+        return supplier == null
+                ? new BearerTokenVerifier(authProperties)
+                : new BearerTokenVerifier(authProperties, supplier);
+    }
+
+    /**
+     * Builds the {@link OidcLoginFlow} used for browser access to the Job Runner UI - null when
+     * {@code jobs.dashboard.auth.oidc.client.id}/{@code .client.secret} aren't both configured,
+     * in which case the gateway falls back to header-only (API-style) authentication. Reuses the
+     * same mTLS trust source as {@link #buildBearerTokenVerifier} so the token-endpoint call also
+     * trusts the Keycloak issuer's TLS certificate.
+     */
+    private OidcLoginFlow buildOidcLoginFlow(JobRunnerAuthProperties authProperties) {
+        if (!authProperties.isBrowserLoginEnabled()) {
+            return null;
+        }
+        Supplier<java.net.http.HttpClient> supplier = buildAuthHttpClientSupplier();
+        return new OidcLoginFlow(
+                authProperties, supplier != null ? supplier : java.net.http.HttpClient::newHttpClient);
+    }
+
+    /**
+     * Builds the HttpClient trust source shared by the auth gateway's JWKS fetch and OIDC token
+     * exchange - both need to trust the Keycloak issuer's TLS certificate. Tried in order:
+     * <ol>
+     *   <li>{@code jobs.dashboard.auth.trustStore*} system properties - a dedicated trust store
+     *       isolated from anything else in the process, proven (via direct testing) to contain the
+     *       CA that signs the Keycloak issuer's certificate. Populated in Azure from the same Kafka
+     *       truststore secret via {@code -D} flags in {@code federator-client-deployment.yaml}.</li>
+     *   <li>{@code client.truststoreFilePath} - the same file-based mTLS truststore local testing
+     *       uses (see {@code client-bcc.properties}), when the dedicated property above isn't set.</li>
+     *   <li>Vault-sourced trust material, when {@link VaultTlsSupport#isVaultTlsEnabled()} - kept as
+     *       a last resort only: it's scoped to federator's own internal gRPC mTLS PKI
+     *       (node-net/client), not necessarily the separate cert-manager-issued chain Keycloak
+     *       uses, so it's tried only when neither of the above is configured.</li>
+     * </ol>
+     * Returns null when none of these are configured, so callers fall back to their own default
+     * (JDK trust store) - preserving prior behaviour for issuers with a publicly-trusted
+     * certificate (or plain HTTP, e.g. local testing).
+     */
+    private Supplier<java.net.http.HttpClient> buildAuthHttpClientSupplier() {
+        // Dedicated jobs.dashboard.auth.trustStore checked first, ahead of Vault: it's proven
+        // (via direct testing) to contain the CA that signs the Keycloak issuer's certificate,
+        // whereas Vault's trust material is scoped to federator's own internal gRPC mTLS PKI
+        // (node-net/client) and does not necessarily cover a separate cert-manager-issued chain
+        // like Keycloak's. This also matches local testing (client.truststoreFilePath, below),
+        // which works reliably using the JDK's own TrustManagerFactory output directly - same
+        // approach, just a different property/file.
+        String authTrustStorePath = System.getProperty("jobs.dashboard.auth.trustStore");
+        if (authTrustStorePath != null) {
+            SSLContext sslContext = trustOnlySslContext(loadAuthTrustManagers(authTrustStorePath));
+            java.net.http.HttpClient httpClient =
+                    java.net.http.HttpClient.newBuilder().sslContext(sslContext).build();
+            return () -> httpClient;
+        }
+        String truststorePath = PropertyUtil.getPropertyValue(PROP_CLIENT_TRUSTSTORE_FILE_PATH, "");
+        if (!truststorePath.isBlank()) {
+            String truststorePassword = PropertyUtil.getPropertyValue(PROP_CLIENT_TRUSTSTORE_PASSWORD, "");
+            SSLContext sslContext = SSLUtils.createSSLContextWithTrustStore(truststorePath, truststorePassword);
+            java.net.http.HttpClient httpClient =
+                    java.net.http.HttpClient.newBuilder().sslContext(sslContext).build();
+            return () -> httpClient;
+        }
+        if (VaultTlsSupport.isVaultTlsEnabled()) {
+            SSLContext sslContext = trustOnlySslContext(VaultTlsSupport.trustManagers());
+            java.net.http.HttpClient httpClient =
+                    java.net.http.HttpClient.newBuilder().sslContext(sslContext).build();
+            return () -> httpClient;
+        }
+        return null;
+    }
+
+    private static TrustManager[] loadAuthTrustManagers(String trustStorePath) {
+        try {
+            String trustStoreType =
+                    System.getProperty("jobs.dashboard.auth.trustStoreType", java.security.KeyStore.getDefaultType());
+            String trustStorePassword = System.getProperty("jobs.dashboard.auth.trustStorePassword", "");
+            java.security.KeyStore trustStore = java.security.KeyStore.getInstance(trustStoreType);
+            try (var in = java.nio.file.Files.newInputStream(java.nio.file.Path.of(trustStorePath))) {
+                trustStore.load(in, trustStorePassword.toCharArray());
+            }
+            javax.net.ssl.TrustManagerFactory tmf =
+                    javax.net.ssl.TrustManagerFactory.getInstance(javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm());
+            tmf.init(trustStore);
+            return tmf.getTrustManagers();
+        } catch (Exception e) {
+            throw new FederatorSslException(
+                    "Failed to load trust managers from jobs.dashboard.auth.trustStore=" + trustStorePath, e);
+        }
+    }
+
+    private static SSLContext trustOnlySslContext(TrustManager[] trustManagers) {
+        try {
+            SSLContext sslContext = SSLContext.getInstance("TLS");
+            sslContext.init(null, trustManagers, null);
+            return sslContext;
+        } catch (Exception e) {
+            throw new FederatorSslException("Failed to create SSLContext from trust material.", e);
+        }
+    }
+
     private void shutdown() {
+        try {
+            if (httpsDashboardProxy != null) {
+                httpsDashboardProxy.stop();
+            }
+        } catch (Exception e) {
+            log.debug("Ignoring exception while stopping HTTPS dashboard proxy", e);
+        } finally {
+            httpsDashboardProxy = null;
+        }
+        try {
+            if (authGateway != null) {
+                authGateway.stop();
+            }
+        } catch (Exception e) {
+            log.debug("Ignoring exception while stopping Job Runner auth gateway", e);
+        } finally {
+            authGateway = null;
+        }
         try {
             JobRunr.destroy();
         } catch (Exception e) {

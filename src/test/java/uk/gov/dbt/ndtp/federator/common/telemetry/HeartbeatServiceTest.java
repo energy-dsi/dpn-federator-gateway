@@ -44,6 +44,13 @@ class HeartbeatServiceTest {
         // though the ListAppender below is attached directly to this exact logger instance.
         boundLogger.setLevel(ch.qos.logback.classic.Level.ALL);
         ListAppender<ILoggingEvent> a = new ListAppender<>();
+        // The background heartbeat scheduler thread (started by service.start()) writes to
+        // this appender concurrently with the test thread's await()/firstWithEvent() reads,
+        // which stream() the list directly. ListAppender's default backing list is a plain
+        // ArrayList (not thread-safe), so concurrent add() + stream() throws
+        // ConcurrentModificationException intermittently. Swap in a thread-safe list before
+        // start() - the field is public precisely to allow this.
+        a.list = new java.util.concurrent.CopyOnWriteArrayList<>();
         a.start();
         boundLogger.addAppender(a);
         return a;

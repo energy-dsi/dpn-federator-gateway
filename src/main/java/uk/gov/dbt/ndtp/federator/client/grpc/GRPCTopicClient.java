@@ -64,11 +64,6 @@ import uk.gov.dbt.ndtp.federator.common.utils.SecurityLabelUtil;
 import uk.gov.dbt.ndtp.federator.common.utils.ObjectMapperUtil;
 import java.util.Map;
 import java.util.Objects;
-import io.grpc.Status.Code.*;
-
-import static io.grpc.Status.*;
-import static io.grpc.Status.Code.UNAVAILABLE;
-import static io.grpc.Status.DEADLINE_EXCEEDED;
 
 
 /**
@@ -166,7 +161,7 @@ public class GRPCTopicClient extends GRPCAbstractClient {
 
     public void processTopic(String topic, long offset) {
         LOGGER.info("Processing topic: '{}' with offset: '{}'", topic, offset);
-        RedisUtil.getInstance();
+        RedisUtil.getKeycloakGatedInstance();
         LOGGER.debug("Redis connectivity check passed");
         TopicRequest topicRequest =
                 TopicRequest.newBuilder().setTopic(topic).setOffset(offset).build();
@@ -347,7 +342,7 @@ public class GRPCTopicClient extends GRPCAbstractClient {
                                     batch.getTopic(), batch.getOffset(),
                                     inBytes, -1, expected, actual, ex,
                                     orgName, schemaName, productName));
-                            RedisUtil.getInstance().setOffset(
+                            RedisUtil.getKeycloakGatedInstance().setOffset(
                                     getRedisPrefix(), req.getTopic(), batch.getOffset() + 1);
                             continue;
                         }
@@ -380,7 +375,7 @@ public class GRPCTopicClient extends GRPCAbstractClient {
                 // The persisted offset here is read when a new job starts.
                 // Store the next offset to be read to avoid record overlaps.
                 long nextOffset = batch.getOffset() + 1;
-                RedisUtil.getInstance().setOffset(getRedisPrefix(), req.getTopic(), nextOffset);
+                RedisUtil.getKeycloakGatedInstance().setOffset(getRedisPrefix(), req.getTopic(), nextOffset);
                 LOGGER.debug("Wrote next offset {} to redis for topic {}", nextOffset, req.getTopic());
             }
         } catch (Exception e) {

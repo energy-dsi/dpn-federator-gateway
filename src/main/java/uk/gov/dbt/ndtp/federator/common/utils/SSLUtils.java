@@ -25,11 +25,22 @@
  */
 package uk.gov.dbt.ndtp.federator.common.utils;
 
+import java.io.ByteArrayInputStream;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.security.GeneralSecurityException;
+import java.security.KeyFactory;
 import java.security.KeyStore;
+import java.security.PrivateKey;
+import java.security.cert.Certificate;
+import java.security.cert.CertificateFactory;
+import java.security.spec.PKCS8EncodedKeySpec;
+import java.util.Base64;
+import java.util.Collection;
 import javax.net.ssl.KeyManager;
 import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
@@ -93,6 +104,62 @@ public class SSLUtils {
     }
 
     /**
+     * Creates KeyManagers from a PEM certificate file and a PEM private-key file.
+     * <p>
+     * The certificate file may contain the leaf certificate alone or the leaf followed by its
+     * CA chain (multiple {@code CERTIFICATE} blocks). The key file must be an unencrypted PKCS#8
+     * private key ({@code -----BEGIN PRIVATE KEY-----}). The material is assembled into an
+     * in-memory PKCS12 keystore; nothing is written to disk.
+     *
+     * @param certFilePath path to the PEM certificate (chain) file
+     * @param keyFilePath  path to the PEM PKCS#8 private-key file
+     * @return an array of KeyManagers
+     * @throws FederatorSslException if either file is missing or cannot be parsed
+     */
+    public static KeyManager[] createKeyManagerFromPem(String certFilePath, String keyFilePath) {
+        try {
+            String certPem = Files.readString(Path.of(certFilePath), StandardCharsets.UTF_8);
+            String keyPem = Files.readString(Path.of(keyFilePath), StandardCharsets.UTF_8);
+
+            CertificateFactory cf = CertificateFactory.getInstance("X.509");
+            Collection<? extends Certificate> parsed =
+                    cf.generateCertificates(new ByteArrayInputStream(certPem.getBytes(StandardCharsets.UTF_8)));
+            if (parsed.isEmpty()) {
+                throw new FederatorSslException("No certificates found in PEM file: " + certFilePath);
+            }
+            Certificate[] chain = parsed.toArray(new Certificate[0]);
+
+            PrivateKey privateKey = parsePkcs8PrivateKey(keyPem);
+
+            // In-memory-only password: the keystore is never persisted, so this only guards the
+            // transient PKCS12 entry within this JVM.
+            char[] password = "in-memory".toCharArray();
+            KeyStore keyStore = KeyStore.getInstance(KEYSTORE_TYPE_PKCS12);
+            keyStore.load(null, null);
+            keyStore.setKeyEntry("dashboard", privateKey, password, chain);
+
+            KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
+            kmf.init(keyStore, password);
+            log.info("Built KeyManagers from PEM cert '{}' (chain length {})", certFilePath, chain.length);
+            return kmf.getKeyManagers();
+        } catch (FederatorSslException e) {
+            throw e;
+        } catch (IOException | GeneralSecurityException e) {
+            throw new FederatorSslException(
+                    "Failed to build KeyManagers from PEM cert '" + certFilePath + "' / key '" + keyFilePath + "'", e);
+        }
+    }
+
+    private static PrivateKey parsePkcs8PrivateKey(String pem) throws GeneralSecurityException {
+        String base64 = pem.replaceAll("-----BEGIN (?:RSA )?PRIVATE KEY-----", "")
+                .replaceAll("-----END (?:RSA )?PRIVATE KEY-----", "")
+                .replaceAll("\\s", "");
+        byte[] der = Base64.getDecoder().decode(base64);
+        PKCS8EncodedKeySpec spec = new PKCS8EncodedKeySpec(der);
+        return KeyFactory.getInstance("RSA").generatePrivate(spec);
+    }
+
+    /**
      * Creates TrustManagers from a JKS file.
      *
      * @param trustStoreFilePath the path to the JKS truststore file
@@ -121,14 +188,38 @@ public class SSLUtils {
             throw new FederatorSslException("Trust store input stream or password is not set.");
         }
         try {
-            KeyStore trustStore = KeyStore.getInstance(KEYSTORE_TYPE_JKS);
-            trustStore.load(trustStoreInputStream, trustStorePassword.toCharArray());
+            byte[] bytes = trustStoreInputStream.readAllBytes();
+            KeyStore trustStore = loadTrustStore(bytes, trustStorePassword);
             TrustManagerFactory tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
             tmf.init(trustStore);
             return tmf.getTrustManagers();
         } catch (IOException | GeneralSecurityException e) {
             throw new FederatorSslException("Failed to load trust store keystore.", e);
         }
+    }
+
+    /**
+     * Loads a truststore from the given bytes, auto-detecting whether its actual on-disk format
+     * is JKS or PKCS12. Modern {@code keytool} produces PKCS12-format files by default even when
+     * given a ".jks" filename/extension, so a truststore genuinely named "truststore.jks.backup" may
+     * not actually be in JKS format. Tries JKS first (for genuinely older JKS files), falling
+     * back to PKCS12.
+     *
+     * @throws FederatorSslException if the truststore cannot be loaded as either format
+     */
+    private static KeyStore loadTrustStore(byte[] truststoreBytes, String truststorePassword) {
+        Exception lastError = null;
+        for (String type : new String[] {KEYSTORE_TYPE_JKS, KEYSTORE_TYPE_PKCS12}) {
+            try {
+                KeyStore keyStore = KeyStore.getInstance(type);
+                keyStore.load(new java.io.ByteArrayInputStream(truststoreBytes), truststorePassword.toCharArray());
+                log.info("Truststore loaded successfully as {} format", type);
+                return keyStore;
+            } catch (Exception e) {
+                lastError = e;
+            }
+        }
+        throw new FederatorSslException("Failed to load truststore as JKS or PKCS12 format.", lastError);
     }
 
     /**
@@ -196,12 +287,12 @@ public class SSLUtils {
             KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
             kmf.init(keyStore, keystorePassword.toCharArray());
 
-            // Load truststore (JKS)
-            KeyStore trustStore = KeyStore.getInstance(KEYSTORE_TYPE_JKS);
+            // Load truststore (auto-detects JKS vs PKCS12 format)
+            byte[] truststoreBytes;
             try (InputStream is = new FileInputStream(truststorePath)) {
-                trustStore.load(is, truststorePassword.toCharArray());
+                truststoreBytes = is.readAllBytes();
             }
-
+            KeyStore trustStore = loadTrustStore(truststoreBytes, truststorePassword);
             printCertificates("Truststore", trustStore);
 
             TrustManagerFactory tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
@@ -218,17 +309,17 @@ public class SSLUtils {
     /**
      * Creates an SSLContext using only the provided truststore path and password.
      *
-     * @param truststorePath the path to the JKS truststore file
+     * @param truststorePath the path to the truststore file (JKS or PKCS12 format, auto-detected)
      * @param truststorePassword the password for the truststore
      * @return an initialized SSLContext
      * */
     public static SSLContext createSSLContextWithTrustStore(String truststorePath, String truststorePassword) {
         try {
-            // Load truststore (JKS)
-            KeyStore trustStore = KeyStore.getInstance(KEYSTORE_TYPE_JKS);
+            byte[] truststoreBytes;
             try (InputStream is = new FileInputStream(truststorePath)) {
-                trustStore.load(is, truststorePassword.toCharArray());
+                truststoreBytes = is.readAllBytes();
             }
+            KeyStore trustStore = loadTrustStore(truststoreBytes, truststorePassword);
             printCertificates("Truststore", trustStore);
             TrustManagerFactory tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
             tmf.init(trustStore);

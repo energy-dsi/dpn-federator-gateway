@@ -46,6 +46,7 @@ class ProducerConsumerConfigServiceFactoryTest {
             propMock.when(() -> PropertyUtil.getPropertyValue(eq("management.node.request.timeout"), anyString()))
                     .thenReturn("5");
             grpcMock.when(GRPCUtils::createIdpTokenService).thenReturn(mock(IdpTokenService.class));
+            grpcMock.when(GRPCUtils::createRedisIdpTokenService).thenReturn(mock(IdpTokenService.class));
             httpMock.when(() -> HttpClientFactoryUtils.createHttpClientWithMtls(any()))
                     .thenReturn(mock(HttpClient.class));
 

@@ -17,6 +17,7 @@ import uk.gov.dbt.ndtp.federator.client.storage.StoredFileResult;
 import uk.gov.dbt.ndtp.federator.client.storage.impl.S3ReceivedFileStorage;
 import uk.gov.dbt.ndtp.federator.common.service.idp.IdpTokenService;
 import uk.gov.dbt.ndtp.federator.common.utils.GRPCUtils;
+import uk.gov.dbt.ndtp.federator.common.utils.KeycloakSessionGuard;
 import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
 import uk.gov.dbt.ndtp.federator.common.utils.RedisUtil;
 import uk.gov.dbt.ndtp.federator.exceptions.FileAssemblyException;
@@ -31,6 +32,10 @@ class GRPCFileClientTest {
     @BeforeEach
     void setUp() {
         PropertyUtil.clear();
+        // Required since RedisUtil.getKeycloakGatedInstance() now gates access through
+        // KeycloakSessionGuard - without this, ensureAuthenticated() throws
+        // IllegalStateException before any test logic runs.
+        KeycloakSessionGuard.configure(() -> "test-token");
     }
 
     @AfterEach
@@ -97,6 +102,7 @@ class GRPCFileClientTest {
                         Mockito.mockStatic(GRPCUtils.class, Mockito.CALLS_REAL_METHODS)) {
             grpcStatic.when(() -> FederatorServiceGrpc.newBlockingStub(any())).thenReturn(stub);
             redisStatic.when(RedisUtil::getInstance).thenReturn(redisMock);
+            redisStatic.when(RedisUtil::getKeycloakGatedInstance).thenReturn(redisMock);
             grpcUtilsStatic.when(GRPCUtils::createIdpTokenService).thenReturn(idpMock);
 
             GRPCFileClient clientUnderTest = new GRPCFileClient(client, key, serverName, host, port, tls, topicPrefix);
@@ -172,6 +178,7 @@ class GRPCFileClientTest {
                         Mockito.mockStatic(GRPCUtils.class, Mockito.CALLS_REAL_METHODS)) {
             grpcStatic.when(() -> FederatorServiceGrpc.newBlockingStub(any())).thenReturn(stub);
             redisStatic.when(RedisUtil::getInstance).thenReturn(redisMock);
+            redisStatic.when(RedisUtil::getKeycloakGatedInstance).thenReturn(redisMock);
             grpcUtilsStatic.when(GRPCUtils::createIdpTokenService).thenReturn(idpMock);
 
             GRPCFileClient clientUnderTest = new GRPCFileClient(client, key, serverName, host, port, tls, topicPrefix);
@@ -201,9 +208,12 @@ class GRPCFileClientTest {
         PropertyUtil.init("test.properties");
         // Mock GRPCUtils to avoid loading configuration/SSL during client construction
         IdpTokenService idpMock = mock(IdpTokenService.class);
-        try (MockedStatic<GRPCUtils> grpcUtilsStatic =
-                Mockito.mockStatic(GRPCUtils.class, Mockito.CALLS_REAL_METHODS)) {
+        RedisUtil redisMock = mock(RedisUtil.class);
+        try (MockedStatic<GRPCUtils> grpcUtilsStatic = Mockito.mockStatic(GRPCUtils.class, Mockito.CALLS_REAL_METHODS);
+                MockedStatic<RedisUtil> redisStatic = Mockito.mockStatic(RedisUtil.class)) {
             grpcUtilsStatic.when(GRPCUtils::createIdpTokenService).thenReturn(idpMock);
+            redisStatic.when(RedisUtil::getInstance).thenReturn(redisMock);
+            redisStatic.when(RedisUtil::getKeycloakGatedInstance).thenReturn(redisMock);
 
             GRPCFileClient clientUnderTest = new GRPCFileClient(client, key, serverName, host, port, tls, topicPrefix);
             assertThrows(FileAssemblyException.class, () -> clientUnderTest.processTopic(topic, 0L, null));
@@ -225,9 +235,12 @@ class GRPCFileClientTest {
 
         PropertyUtil.init("test.properties");
         IdpTokenService idpMock = mock(IdpTokenService.class);
-        try (MockedStatic<GRPCUtils> grpcUtilsStatic =
-                Mockito.mockStatic(GRPCUtils.class, Mockito.CALLS_REAL_METHODS)) {
+        RedisUtil redisMock = mock(RedisUtil.class);
+        try (MockedStatic<GRPCUtils> grpcUtilsStatic = Mockito.mockStatic(GRPCUtils.class, Mockito.CALLS_REAL_METHODS);
+                MockedStatic<RedisUtil> redisStatic = Mockito.mockStatic(RedisUtil.class)) {
             grpcUtilsStatic.when(GRPCUtils::createIdpTokenService).thenReturn(idpMock);
+            redisStatic.when(RedisUtil::getInstance).thenReturn(redisMock);
+            redisStatic.when(RedisUtil::getKeycloakGatedInstance).thenReturn(redisMock);
 
             GRPCFileClient clientUnderTest = new GRPCFileClient(client, key, serverName, host, port, tls, topicPrefix);
             FileAssemblyException ex =
@@ -251,9 +264,12 @@ class GRPCFileClientTest {
 
         PropertyUtil.init("test.properties");
         IdpTokenService idpMock = mock(IdpTokenService.class);
-        try (MockedStatic<GRPCUtils> grpcUtilsStatic =
-                Mockito.mockStatic(GRPCUtils.class, Mockito.CALLS_REAL_METHODS)) {
+        RedisUtil redisMock = mock(RedisUtil.class);
+        try (MockedStatic<GRPCUtils> grpcUtilsStatic = Mockito.mockStatic(GRPCUtils.class, Mockito.CALLS_REAL_METHODS);
+                MockedStatic<RedisUtil> redisStatic = Mockito.mockStatic(RedisUtil.class)) {
             grpcUtilsStatic.when(GRPCUtils::createIdpTokenService).thenReturn(idpMock);
+            redisStatic.when(RedisUtil::getInstance).thenReturn(redisMock);
+            redisStatic.when(RedisUtil::getKeycloakGatedInstance).thenReturn(redisMock);
 
             GRPCFileClient clientUnderTest = new GRPCFileClient(client, key, serverName, host, port, tls, topicPrefix);
             FileAssemblyException ex =
@@ -334,6 +350,7 @@ class GRPCFileClientTest {
                         Mockito.mockStatic(GRPCUtils.class, Mockito.CALLS_REAL_METHODS)) {
             grpcStatic.when(() -> FederatorServiceGrpc.newBlockingStub(any())).thenReturn(stub);
             redisStatic.when(RedisUtil::getInstance).thenReturn(redisMock);
+            redisStatic.when(RedisUtil::getKeycloakGatedInstance).thenReturn(redisMock);
             grpcUtilsStatic.when(GRPCUtils::createIdpTokenService).thenReturn(idpMock);
 
             GRPCFileClient clientUnderTest = new GRPCFileClient(client, key, serverName, host, port, tls, topicPrefix);
@@ -382,6 +399,7 @@ class GRPCFileClientTest {
                         Mockito.mockStatic(GRPCUtils.class, Mockito.CALLS_REAL_METHODS)) {
             grpcStatic.when(() -> FederatorServiceGrpc.newBlockingStub(any())).thenReturn(stub);
             redisStatic.when(RedisUtil::getInstance).thenReturn(redisMock);
+            redisStatic.when(RedisUtil::getKeycloakGatedInstance).thenReturn(redisMock);
             grpcUtilsStatic.when(GRPCUtils::createIdpTokenService).thenReturn(idpMock);
 
             GRPCFileClient clientUnderTest = new GRPCFileClient(client, key, serverName, host, port, tls, topicPrefix);
@@ -465,6 +483,7 @@ class GRPCFileClientTest {
                         Mockito.mockStatic(ReceivedFileStorageFactory.class)) {
             grpcStatic.when(() -> FederatorServiceGrpc.newBlockingStub(any())).thenReturn(stub);
             redisStatic.when(RedisUtil::getInstance).thenReturn(redisMock);
+            redisStatic.when(RedisUtil::getKeycloakGatedInstance).thenReturn(redisMock);
             grpcUtilsStatic.when(GRPCUtils::createIdpTokenService).thenReturn(idpMock);
             storageFactoryStatic.when(ReceivedFileStorageFactory::get).thenReturn(new FailingS3());
 

@@ -45,7 +45,7 @@ public final class FileVersionFinalizer {
         }
 
         ReceivedFileStorage storage = ReceivedFileStorageFactory.get();
-        RedisUtil redis = RedisUtil.getInstance();
+        RedisUtil redis = RedisUtil.getKeycloakGatedInstance();
 
         String counterKey = COUNTER_PREFIX + DestinationVersioning.productKey(destination);
         long startCounter = readCounter(redis, counterKey);

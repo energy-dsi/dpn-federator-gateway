@@ -128,6 +128,29 @@ class GRPCUtilsTest {
     }
 
     @Test
+    void testCreateRedisIdpTokenService_UsesClientSecretNotMtls() throws Exception {
+        Properties props = new Properties();
+        props.setProperty("redis.idp.token.url", "https://keycloak.example.com/realms/test/protocol/openid-connect/token");
+        props.setProperty("redis.idp.jwks.url", "https://keycloak.example.com/realms/test/protocol/openid-connect/certs");
+        props.setProperty("redis.idp.client.id", "dpn-service-client");
+        props.setProperty("redis.idp.client.secret", "test-secret");
+        writeCommonConfig("common_redis_idp.properties", props);
+
+        try (MockedStatic<HttpClientFactoryUtils> factoryMock = mockStatic(HttpClientFactoryUtils.class)) {
+            factoryMock
+                    .when(() -> HttpClientFactoryUtils.createHttpClient(any(), eq("redis.idp.")))
+                    .thenReturn(mock(java.net.http.HttpClient.class));
+
+            IdpTokenService service = GRPCUtils.createRedisIdpTokenService();
+
+            assertTrue(service instanceof IdpTokenServiceClientSecretImpl);
+            // Must NOT use the mTLS-transport factory method - that reads the "idp."-prefixed
+            // keystore/truststore unconditionally, which would be the wrong client's material.
+            factoryMock.verify(() -> HttpClientFactoryUtils.createHttpClientWithMtls(any()), never());
+        }
+    }
+
+    @Test
     void testCreateIdpTokenService_PrivateKeyJwt_ExplicitMode() throws Exception {
         Properties props = new Properties();
         props.setProperty("idp.auth.mode", "private_key_jwt");
@@ -221,8 +244,18 @@ class GRPCUtilsTest {
     }
 
     @Test
-    void testGenerateChannelCredentials() {
-        PropertyUtil.init("test.properties");
+    void testGenerateChannelCredentials() throws Exception {
+        // generateChannelCredentials() checks VaultTlsSupport.isVaultTlsEnabled() first (defaults to
+        // true when unset), which would otherwise route this test through the Vault-backed keystore
+        // path instead of the file-based SSLUtils path being exercised here. Disable it explicitly via
+        // a common-config file so the legacy P12/truststore path (mocked below) is used.
+        // NOTE: writeCommonConfig() calls PropertyUtil.init(...) internally, which replaces the
+        // PropertyUtil instance - so it must run BEFORE the client.* properties are set below,
+        // otherwise this call would wipe them out.
+        Properties vaultDisabled = new Properties();
+        vaultDisabled.setProperty("vault.tls.enabled", "false");
+        writeCommonConfig("common_vault_disabled.properties", vaultDisabled);
+
         PropertyUtil.getInstance().properties.setProperty("client.p12FilePath", "nonexistent.p12");
         PropertyUtil.getInstance().properties.setProperty("client.p12Password", "pass");
         PropertyUtil.getInstance().properties.setProperty("client.truststoreFilePath", "nonexistent.jks");

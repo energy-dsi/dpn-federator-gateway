@@ -31,6 +31,8 @@ import static uk.gov.dbt.ndtp.federator.common.utils.GRPCUtils.*;
 import io.grpc.*;
 import io.opentelemetry.instrumentation.grpc.v1_6.GrpcTelemetry;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.Executors;
@@ -48,13 +50,9 @@ import uk.gov.dbt.ndtp.federator.common.service.idp.IdpTokenService;
 import uk.gov.dbt.ndtp.federator.common.service.ocsp.OcspCertificateVerificationService;
 import uk.gov.dbt.ndtp.federator.common.service.ocsp.OcspCertificateVerificationServiceImpl;
 import uk.gov.dbt.ndtp.federator.common.service.secret.SecretProvider;
+import uk.gov.dbt.ndtp.federator.common.service.secret.VaultTlsSupport;
 import uk.gov.dbt.ndtp.federator.common.telemetry.OpenTelemetryConfig;
-import uk.gov.dbt.ndtp.federator.common.utils.GRPCUtils;
-import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
-import uk.gov.dbt.ndtp.federator.common.utils.ReloadableX509KeyManager;
-import uk.gov.dbt.ndtp.federator.common.utils.ReloadableX509TrustManager;
-import uk.gov.dbt.ndtp.federator.common.utils.SSLUtils;
-import uk.gov.dbt.ndtp.federator.common.utils.ThreadUtil;
+import uk.gov.dbt.ndtp.federator.common.utils.*;
 import uk.gov.dbt.ndtp.federator.server.OcspServerInterceptor;
 import uk.gov.dbt.ndtp.federator.server.grpc.interceptor.AuthServerInterceptor;
 import uk.gov.dbt.ndtp.federator.server.grpc.interceptor.ConsumerVerificationServerInterceptor;
@@ -154,37 +152,50 @@ public class GRPCServer implements AutoCloseable {
         // W3C trace context the federator client sent. Registered outermost so a span exists
         // even if auth later rejects the call.
         //  GrpcTelemetry grpcTelemetry = GrpcTelemetry.create(OpenTelemetryConfig.get()); // DISABLED: NoClassDefFoundError NetworkAttributes
+
+        // keycloak.auth.enabled controls ONLY Redis (KeycloakSessionGuard gating and Redis TLS -
+        // see RedisUtil). gRPC-level authentication (this interceptor chain) is intentionally
+        // NOT affected by that switch and always runs, matching this service's original,
+        // pre-switch behaviour.
+        List<ServerInterceptor> interceptors = new ArrayList<>();
+        interceptors.add(new ConsumerVerificationServerInterceptor(tokenService, commonProperties));
+        interceptors.add(new AuthServerInterceptor(tokenService));
+        interceptors.add(new OcspServerInterceptor(tokenService, ocspService));
+        interceptors.add(new CustomServerInterceptor());
+
         return builder.executor(ThreadUtil.threadExecutor(GRPC_SERVER))
                 .keepAliveTime(PropertyUtil.getPropertyIntValue(SERVER_KEEP_ALIVE_TIME, FIVE), TimeUnit.SECONDS)
                 .keepAliveTimeout(PropertyUtil.getPropertyIntValue(SERVER_KEEP_ALIVE_TIMEOUT, ONE), TimeUnit.SECONDS)
-                .addService(ServerInterceptors.intercept(
-                        serviceDef,
-                        (ServerInterceptor) new ConsumerVerificationServerInterceptor(tokenService, commonProperties),
-                        (ServerInterceptor) new AuthServerInterceptor(tokenService),
-                        (ServerInterceptor) new CustomServerInterceptor(),
-                        (ServerInterceptor) new OcspServerInterceptor(tokenService,ocspService)));
+                .addService(ServerInterceptors.intercept(serviceDef, interceptors));
 
     }
 
     @SneakyThrows
     private ServerCredentials generateServerCredentials() {
+        KeyManager[] keyManagerFromP12;
+        TrustManager[] trustManager;
 
-        String p12FilePath = PropertyUtil.getPropertyValue(SERVER_P12_FILE_PATH);
-        String p12Password = PropertyUtil.getPropertyValue(SERVER_P12_PASSWORD);
-        String trustStoreFilePath = PropertyUtil.getPropertyValue(SERVER_TRUSTSTORE_FILE_PATH);
-        String trustStorePassword = PropertyUtil.getPropertyValue(SERVER_TRUSTSTORE_PASSWORD);
+        if (VaultTlsSupport.isVaultTlsEnabled()) {
+            LOGGER.info("Server TLS material sourced from Vault (no keystore files on disk).");
+            keyManagerFromP12 = VaultTlsSupport.keyManagers();
+            trustManager = VaultTlsSupport.trustManagers();
+        } else {
+            String p12FilePath = PropertyUtil.getPropertyValue(SERVER_P12_FILE_PATH);
+            String p12Password = PropertyUtil.getPropertyValue(SERVER_P12_PASSWORD);
+            String trustStoreFilePath = PropertyUtil.getPropertyValue(SERVER_TRUSTSTORE_FILE_PATH);
+            String trustStorePassword = PropertyUtil.getPropertyValue(SERVER_TRUSTSTORE_PASSWORD);
 
-        LOGGER.info(
-                "Using p12 file path: {}, truststore file path: {}, p12 password is set: {}, truststore password is"
-                        + " set: {}",
-                p12FilePath,
-                trustStoreFilePath,
-                p12Password != null,
-                trustStorePassword != null);
+            LOGGER.info(
+                    "Using p12 file path: {}, truststore file path: {}, p12 password is set: {}, truststore password is"
+                            + " set: {}",
+                    p12FilePath,
+                    trustStoreFilePath,
+                    p12Password != null,
+                    trustStorePassword != null);
 
-        KeyManager[] keyManagerFromP12 = SSLUtils.createKeyManagerFromP12(p12FilePath, p12Password);
-        TrustManager[] trustManager = SSLUtils.createTrustManager(trustStoreFilePath, trustStorePassword);
-
+            keyManagerFromP12 = SSLUtils.createKeyManagerFromP12(p12FilePath, p12Password);
+            trustManager = SSLUtils.createTrustManager(trustStoreFilePath, trustStorePassword);
+        }
         // Unwrap the freshly loaded X509 managers and either install them (first call, at construction
         // time) or hot-swap them into the already-installed reloadable managers (subsequent scheduled
         // reloads). The gRPC server is built once from the stable reloadable managers, so a swap is
