@@ -61,6 +61,8 @@ public class RedisUtil {
     public static final String REDIS_TLS_ENABLED = "redis.tls.enabled";
     public static final String REDIS_TRUSTSTORE_PATH = "redis.truststore.path";
     public static final String REDIS_TRUSTSTORE_PASSWORD = "redis.truststore.password";
+    public static final String REDIS_KEYSTORE_PATH = "redis.keystore.path";
+    public static final String REDIS_KEYSTORE_PASSWORD = "redis.keystore.password";
     public static final String REDIS_AES_KEY = "redis.aes.key";
     public static final String LOCALHOST = "localhost";
     public static final String DEFAULT_PORT = "6379";
@@ -123,8 +125,15 @@ public class RedisUtil {
             String truststorePath = isTLSEnabled ? commonProperties.getProperty(REDIS_TRUSTSTORE_PATH, "") : "";
             String truststorePassword =
                     isTLSEnabled ? commonProperties.getProperty(REDIS_TRUSTSTORE_PASSWORD, "") : "";
+            // Redis defaults to tls-auth-clients yes (mutual TLS), so the client must present its
+            // own certificate, not just trust Redis's - keystorePath blank falls back to
+            // trust-only (buildRedisConnection), which only works if Redis's tls-auth-clients is
+            // explicitly set to no.
+            String keystorePath = isTLSEnabled ? commonProperties.getProperty(REDIS_KEYSTORE_PATH, "") : "";
+            String keystorePassword = isTLSEnabled ? commonProperties.getProperty(REDIS_KEYSTORE_PASSWORD, "") : "";
 
-            instance = new RedisUtil(buildRedisConnection(host, port, isTLSEnabled, truststorePath, truststorePassword));
+            instance = new RedisUtil(buildRedisConnection(
+                    host, port, isTLSEnabled, truststorePath, truststorePassword, keystorePath, keystorePassword));
         }
         return instance;
     }
@@ -157,16 +166,40 @@ public class RedisUtil {
      * @param truststorePath    path to a truststore file (JKS or PKCS12, auto-detected), or blank
      *                          to use the JVM default trust store.
      * @param truststorePassword password for the truststore.
+     * @param keystorePath      path to a PKCS12 keystore holding this client's own certificate
+     *                          and private key, or blank to skip presenting a client certificate.
+     *                          Required when Redis's tls-auth-clients is yes (its default) -
+     *                          otherwise Redis rejects the handshake with "certificate required".
+     * @param keystorePassword  password for the keystore.
      */
     private static JedisPooled buildRedisConnection(
-            String host, int port, boolean isTLSEnabled, String truststorePath, String truststorePassword) {
+            String host,
+            int port,
+            boolean isTLSEnabled,
+            String truststorePath,
+            String truststorePassword,
+            String keystorePath,
+            String keystorePassword) {
 
         DefaultJedisClientConfig.Builder jedisClientConfigBuilder =
                 DefaultJedisClientConfig.builder().ssl(isTLSEnabled);
 
         if (isTLSEnabled && truststorePath != null && !truststorePath.isBlank()) {
-            LOGGER.info("Configuring Redis TLS using truststore '{}'", truststorePath);
-            SSLContext sslContext = SSLUtils.createSSLContextWithTrustStore(truststorePath, truststorePassword);
+            SSLContext sslContext;
+            if (keystorePath != null && !keystorePath.isBlank()) {
+                LOGGER.info(
+                        "Configuring Redis TLS using truststore '{}' and client keystore '{}'",
+                        truststorePath,
+                        keystorePath);
+                sslContext = SSLUtils.createSSLContext(
+                        keystorePath, keystorePassword, truststorePath, truststorePassword);
+            } else {
+                LOGGER.info(
+                        "Configuring Redis TLS using truststore '{}' (no client keystore configured - "
+                                + "requires Redis's tls-auth-clients to be 'no')",
+                        truststorePath);
+                sslContext = SSLUtils.createSSLContextWithTrustStore(truststorePath, truststorePassword);
+            }
             jedisClientConfigBuilder.sslSocketFactory(sslContext.getSocketFactory());
 
             // A bare SSLSocketFactory only validates the certificate CHAIN - it does not
