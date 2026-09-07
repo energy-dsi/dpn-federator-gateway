@@ -23,6 +23,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil;
+import uk.gov.dbt.ndtp.federator.common.utils.RedisUtil;
 import uk.gov.dbt.ndtp.federator.common.utils.ResilienceSupport;
 import uk.gov.dbt.ndtp.federator.exceptions.FederatorTokenException;
 
@@ -31,6 +32,8 @@ class IdpTokenServiceClientSecretImplTest {
     private HttpClient httpClient;
     private ObjectMapper objectMapper;
     private MockedStatic<PropertyUtil> propertyUtilMockedStatic;
+    private MockedStatic<RedisUtil> redisUtilMockedStatic;
+    private RedisUtil redisUtil;
     private Properties properties;
 
     @BeforeEach
@@ -38,6 +41,10 @@ class IdpTokenServiceClientSecretImplTest {
         httpClient = mock(HttpClient.class);
         objectMapper = mock(ObjectMapper.class);
         propertyUtilMockedStatic = mockStatic(PropertyUtil.class);
+        redisUtilMockedStatic = mockStatic(RedisUtil.class);
+        redisUtil = mock(RedisUtil.class);
+        redisUtilMockedStatic.when(RedisUtil::getInstance).thenReturn(redisUtil);
+        when(redisUtil.getValue(anyString(), eq(String.class), eq(true))).thenReturn(null);
 
         properties = new Properties();
         properties.setProperty("idp.jwks.url", "http://localhost/jwks");
@@ -63,23 +70,37 @@ class IdpTokenServiceClientSecretImplTest {
     @AfterEach
     void tearDown() {
         propertyUtilMockedStatic.close();
+        redisUtilMockedStatic.close();
     }
 
     @Test
     void fetchToken_success() throws Exception {
         HttpResponse<String> response = mock(HttpResponse.class);
         when(response.statusCode()).thenReturn(200);
-        when(response.body()).thenReturn("{\"access_token\": \"secret-token\"}");
+        when(response.body()).thenReturn("{\"access_token\": \"secret-token\", \"expires_in\": 3600}");
         when(httpClient.send(any(HttpRequest.class), any(HttpResponse.BodyHandler.class)))
                 .thenReturn(response);
         when(objectMapper.readValue(anyString(), any(TypeReference.class)))
-                .thenReturn(Map.of("access_token", "secret-token"));
+                .thenReturn(Map.of("access_token", "secret-token", "expires_in", 3600));
 
         IdpTokenServiceClientSecretImpl service =
                 new IdpTokenServiceClientSecretImpl((Supplier<HttpClient>) () -> httpClient, objectMapper);
         String token = service.fetchToken("node-1");
 
         assertEquals("secret-token", token);
+        verify(redisUtil).setValue("management_node_node-1_test-client-id_access_token", "secret-token", 3600L);
+    }
+
+    @Test
+    void fetchToken_returnsCachedToken() {
+        when(redisUtil.getValue(anyString(), eq(String.class), eq(true))).thenReturn("cached-token");
+
+        IdpTokenServiceClientSecretImpl service =
+                new IdpTokenServiceClientSecretImpl((Supplier<HttpClient>) () -> httpClient, objectMapper);
+        String token = service.fetchToken("node-1");
+
+        assertEquals("cached-token", token);
+        verifyNoInteractions(httpClient);
     }
 
     @Test
@@ -98,15 +119,38 @@ class IdpTokenServiceClientSecretImplTest {
     void fetchToken_noArgs() throws Exception {
         HttpResponse<String> response = mock(HttpResponse.class);
         when(response.statusCode()).thenReturn(200);
-        when(response.body()).thenReturn("{\"access_token\": \"resilient-secret-token\"}");
+        when(response.body()).thenReturn("{\"access_token\": \"resilient-secret-token\", \"expires_in\": 3600}");
         when(httpClient.send(any(HttpRequest.class), any(HttpResponse.BodyHandler.class)))
                 .thenReturn(response);
         when(objectMapper.readValue(anyString(), any(TypeReference.class)))
-                .thenReturn(Map.of("access_token", "resilient-secret-token"));
+                .thenReturn(Map.of("access_token", "resilient-secret-token", "expires_in", 3600));
 
         IdpTokenServiceClientSecretImpl service = new IdpTokenServiceClientSecretImpl(() -> httpClient, objectMapper);
         String token = service.fetchToken();
 
         assertEquals("resilient-secret-token", token);
+    }
+
+    @Test
+    void fetchToken_usesConfiguredPrefix() throws Exception {
+        properties.setProperty("redis.idp.jwks.url", "http://localhost/redis-jwks");
+        properties.setProperty("redis.idp.token.url", "http://localhost/redis-token");
+        properties.setProperty("redis.idp.client.id", "redis-client-id");
+        properties.setProperty("redis.idp.client.secret", "redis-client-secret");
+
+        HttpResponse<String> response = mock(HttpResponse.class);
+        when(response.statusCode()).thenReturn(200);
+        when(response.body()).thenReturn("{\"access_token\": \"redis-token-value\", \"expires_in\": 60}");
+        when(httpClient.send(any(HttpRequest.class), any(HttpResponse.BodyHandler.class)))
+                .thenReturn(response);
+        when(objectMapper.readValue(anyString(), any(TypeReference.class)))
+                .thenReturn(Map.of("access_token", "redis-token-value", "expires_in", 60));
+
+        IdpTokenServiceClientSecretImpl service =
+                new IdpTokenServiceClientSecretImpl(() -> httpClient, objectMapper, "redis.idp.");
+        String token = service.fetchToken("node-1");
+
+        assertEquals("redis-token-value", token);
+        verify(redisUtil).setValue("management_node_node-1_redis-client-id_access_token", "redis-token-value", 60L);
     }
 }

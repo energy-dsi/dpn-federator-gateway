@@ -188,14 +188,38 @@ public class SSLUtils {
             throw new FederatorSslException("Trust store input stream or password is not set.");
         }
         try {
-            KeyStore trustStore = KeyStore.getInstance(KEYSTORE_TYPE_JKS);
-            trustStore.load(trustStoreInputStream, trustStorePassword.toCharArray());
+            byte[] bytes = trustStoreInputStream.readAllBytes();
+            KeyStore trustStore = loadTrustStore(bytes, trustStorePassword);
             TrustManagerFactory tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
             tmf.init(trustStore);
             return tmf.getTrustManagers();
         } catch (IOException | GeneralSecurityException e) {
             throw new FederatorSslException("Failed to load trust store keystore.", e);
         }
+    }
+
+    /**
+     * Loads a truststore from the given bytes, auto-detecting whether its actual on-disk format
+     * is JKS or PKCS12. Modern {@code keytool} produces PKCS12-format files by default even when
+     * given a ".jks" filename/extension, so a truststore genuinely named "truststore.jks.backup" may
+     * not actually be in JKS format. Tries JKS first (for genuinely older JKS files), falling
+     * back to PKCS12.
+     *
+     * @throws FederatorSslException if the truststore cannot be loaded as either format
+     */
+    private static KeyStore loadTrustStore(byte[] truststoreBytes, String truststorePassword) {
+        Exception lastError = null;
+        for (String type : new String[] {KEYSTORE_TYPE_JKS, KEYSTORE_TYPE_PKCS12}) {
+            try {
+                KeyStore keyStore = KeyStore.getInstance(type);
+                keyStore.load(new java.io.ByteArrayInputStream(truststoreBytes), truststorePassword.toCharArray());
+                log.info("Truststore loaded successfully as {} format", type);
+                return keyStore;
+            } catch (Exception e) {
+                lastError = e;
+            }
+        }
+        throw new FederatorSslException("Failed to load truststore as JKS or PKCS12 format.", lastError);
     }
 
     /**
@@ -263,12 +287,12 @@ public class SSLUtils {
             KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
             kmf.init(keyStore, keystorePassword.toCharArray());
 
-            // Load truststore (JKS)
-            KeyStore trustStore = KeyStore.getInstance(KEYSTORE_TYPE_JKS);
+            // Load truststore (auto-detects JKS vs PKCS12 format)
+            byte[] truststoreBytes;
             try (InputStream is = new FileInputStream(truststorePath)) {
-                trustStore.load(is, truststorePassword.toCharArray());
+                truststoreBytes = is.readAllBytes();
             }
-
+            KeyStore trustStore = loadTrustStore(truststoreBytes, truststorePassword);
             printCertificates("Truststore", trustStore);
 
             TrustManagerFactory tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
@@ -285,17 +309,17 @@ public class SSLUtils {
     /**
      * Creates an SSLContext using only the provided truststore path and password.
      *
-     * @param truststorePath the path to the JKS truststore file
+     * @param truststorePath the path to the truststore file (JKS or PKCS12 format, auto-detected)
      * @param truststorePassword the password for the truststore
      * @return an initialized SSLContext
      * */
     public static SSLContext createSSLContextWithTrustStore(String truststorePath, String truststorePassword) {
         try {
-            // Load truststore (JKS)
-            KeyStore trustStore = KeyStore.getInstance(KEYSTORE_TYPE_JKS);
+            byte[] truststoreBytes;
             try (InputStream is = new FileInputStream(truststorePath)) {
-                trustStore.load(is, truststorePassword.toCharArray());
+                truststoreBytes = is.readAllBytes();
             }
+            KeyStore trustStore = loadTrustStore(truststoreBytes, truststorePassword);
             printCertificates("Truststore", trustStore);
             TrustManagerFactory tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
             tmf.init(trustStore);

@@ -162,6 +162,7 @@ class GRPCTopicClientTest {
 
             kafkaMock.when(() -> KafkaUtil.getKafkaSink(anyString())).thenReturn(sink);
             redisMock.when(RedisUtil::getInstance).thenReturn(redis);
+            redisMock.when(RedisUtil::getKeycloakGatedInstance).thenReturn(redis);
 
             GRPCTopicClient client = spy(new GRPCTopicClient("client", "key", "server", "pref", channel));
             doNothing().when(client).consumeMessagesAndSendOn(any(), any());
@@ -184,6 +185,7 @@ class GRPCTopicClientTest {
 
             kafkaMock.when(() -> KafkaUtil.getKafkaSink(anyString())).thenReturn(sink);
             redisMock.when(RedisUtil::getInstance).thenReturn(mock(RedisUtil.class));
+            redisMock.when(RedisUtil::getKeycloakGatedInstance).thenReturn(mock(RedisUtil.class));
 
             GRPCTopicClient client = spy(new GRPCTopicClient("client", "key", "server", "pref", channel));
             doThrow(new StatusRuntimeException(Status.INVALID_ARGUMENT))
@@ -207,6 +209,7 @@ class GRPCTopicClientTest {
 
             kafkaMock.when(() -> KafkaUtil.getKafkaSink(anyString())).thenReturn(sink);
             redisMock.when(RedisUtil::getInstance).thenReturn(mock(RedisUtil.class));
+            redisMock.when(RedisUtil::getKeycloakGatedInstance).thenReturn(mock(RedisUtil.class));
 
             GRPCTopicClient client = spy(new GRPCTopicClient("client", "key", "server", "pref", channel));
             doThrow(new StatusRuntimeException(Status.INTERNAL)).when(client).consumeMessagesAndSendOn(any(), any());
@@ -226,6 +229,7 @@ class GRPCTopicClientTest {
 
             kafkaMock.when(() -> KafkaUtil.getKafkaSink(anyString())).thenThrow(new KafkaException("error"));
             redisMock.when(RedisUtil::getInstance).thenReturn(mock(RedisUtil.class));
+            redisMock.when(RedisUtil::getKeycloakGatedInstance).thenReturn(mock(RedisUtil.class));
 
             GRPCTopicClient client = new GRPCTopicClient("client", "key", "server", "pref", channel);
             assertThrows(RetryableException.class, () -> client.processTopic("topic", 100L));
@@ -260,6 +264,7 @@ class GRPCTopicClientTest {
         try (MockedStatic<RedisUtil> redisMock = mockStatic(RedisUtil.class);
                 MockedStatic<PropertyUtil> propertyMock = mockStatic(PropertyUtil.class)) {
             redisMock.when(RedisUtil::getInstance).thenReturn(redis);
+            redisMock.when(RedisUtil::getKeycloakGatedInstance).thenReturn(redis);
             propertyMock
                     .when(() -> PropertyUtil.getPropertyIntValue(anyString(), anyString()))
                     .thenReturn(1);

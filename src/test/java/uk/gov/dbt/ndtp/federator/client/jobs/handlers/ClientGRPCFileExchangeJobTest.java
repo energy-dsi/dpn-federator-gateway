@@ -43,6 +43,7 @@ class ClientGRPCFileExchangeJobTest {
         openTelemetryConfigMockedStatic.when(OpenTelemetryConfig::get).thenReturn(OpenTelemetry.noop());
         redisUtil = mock(RedisUtil.class);
         redisUtilMockedStatic.when(RedisUtil::getInstance).thenReturn(redisUtil);
+        redisUtilMockedStatic.when(RedisUtil::getKeycloakGatedInstance).thenReturn(redisUtil);
         propertyUtilMockedStatic
                 .when(() -> PropertyUtil.getPropertyValue(anyString(), anyString()))
                 .thenReturn("prefix");

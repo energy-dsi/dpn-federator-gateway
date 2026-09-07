@@ -98,7 +98,7 @@ class IdpTokenServiceMtlsImplTest {
         String token = service.fetchToken("node-1");
 
         assertEquals("new-token", token);
-        verify(redisUtil).setValue(("management_node_node-1_access_token"), ("new-token"), (3600L));
+        verify(redisUtil).setValue(("management_node_node-1_test-client-id_access_token"), ("new-token"), (3600L));
     }
 
     @Test
@@ -129,7 +129,7 @@ class IdpTokenServiceMtlsImplTest {
         String token = service.fetchToken(null);
 
         assertEquals("default-token", token);
-        verify(redisUtil).setValue("management_node_default_access_token", "default-token", 3600L);
+        verify(redisUtil).setValue("management_node_default_test-client-id_access_token", "default-token", 3600L);
     }
 
     @Test

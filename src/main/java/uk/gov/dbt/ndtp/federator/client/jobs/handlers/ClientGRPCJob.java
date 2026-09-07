@@ -52,7 +52,7 @@ public class ClientGRPCJob implements Job {
     /** Default constructor wires real implementations for backward compatibility. */
     public ClientGRPCJob() {
         this.prefixSupplier = () -> PropertyUtil.getPropertyValue(FEDERATOR_CLIENT_TARGET_TOPIC, "");
-        this.offsetProvider = (prefix, topic) -> RedisUtil.getInstance().getOffset(prefix, topic);
+        this.offsetProvider = (prefix, topic) -> RedisUtil.getKeycloakGatedInstance().getOffset(prefix, topic);
         this.clientFactory = (config, prefix) -> new WrappedGRPCClient(new GRPCTopicClient(config, prefix));
     }
 

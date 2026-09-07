@@ -36,7 +36,7 @@ public class ClientGRPCFileExchangeJob implements Job {
     /** Default constructor wires real implementations for backward compatibility. */
     public ClientGRPCFileExchangeJob() {
         this.prefixSupplier = () -> PropertyUtil.getPropertyValue(KAFKA_TOPIC_PREFIX, "");
-        this.offsetProvider = (prefix, topic) -> RedisUtil.getInstance().getOffset(prefix, topic);
+        this.offsetProvider = (prefix, topic) -> RedisUtil.getKeycloakGatedInstance().getOffset(prefix, topic);
     }
 
     /** Convenience constructor to set initial request using default wiring. */
