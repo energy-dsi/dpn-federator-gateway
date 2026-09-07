@@ -81,6 +81,13 @@ public final class OpenTelemetryConfig {
         boolean exportingViaOtlp = false;
         try {
             String componentName = resolveComponentName();
+            // DSI EDIT (OTLP truststore): trust the OTel Collector's HTTPS OTLP receiver using
+            // the same JKS truststore Kafka already trusts brokers with (OTEL_EXPORTER_OTLP_*
+            // truststore env vars), rather than the OTel autoconfigure SDK's own PEM-only
+            // OTEL_EXPORTER_OTLP_CERTIFICATE support. Null when those env vars are unset, in
+            // which case the exporter customizers below are no-ops and autoconfigure's default
+            // trust resolution applies unchanged.
+            OtlpTruststoreSupport truststore = OtlpTruststoreSupport.resolve();
             AutoConfiguredOpenTelemetrySdk autoConfigured = AutoConfiguredOpenTelemetrySdk.builder()
                     // DSI EDIT (log.component fix): stamp "component.name" onto every emitted
                     // log record so Data Prepper's existing component.name -> log.component
@@ -89,6 +96,12 @@ public final class OpenTelemetryConfig {
                     .addLogRecordProcessorCustomizer((delegate, config) ->
                             LogRecordProcessor.composite(
                                     new ComponentNameLogRecordProcessor(componentName), delegate))
+                    .addSpanExporterCustomizer((exporter, config) ->
+                            truststore == null ? exporter : truststore.customizeSpanExporter(exporter))
+                    .addMetricExporterCustomizer((exporter, config) ->
+                            truststore == null ? exporter : truststore.customizeMetricExporter(exporter))
+                    .addLogRecordExporterCustomizer((exporter, config) ->
+                            truststore == null ? exporter : truststore.customizeLogRecordExporter(exporter))
                     .build();
             OpenTelemetrySdk sdk = autoConfigured.getOpenTelemetrySdk();
             openTelemetry = sdk;
