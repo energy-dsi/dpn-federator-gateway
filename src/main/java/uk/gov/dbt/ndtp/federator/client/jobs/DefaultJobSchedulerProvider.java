@@ -10,7 +10,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.function.Supplier;
-import javax.net.ssl.KeyManager;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManager;
 import lombok.extern.slf4j.Slf4j;
@@ -56,7 +55,7 @@ import uk.gov.dbt.ndtp.federator.exceptions.FederatorSslException;
  *       (firewall / do not expose the port / NetworkPolicy) - a proxy's TLS or auth check in front
  *       of it is bypassable otherwise.</li>
  *   <li>jobs.dashboard.https.port = 8443</li>
- *   <li>jobs.dashboard.https.certFilePath / jobs.dashboard.https.keyFilePath - required when https enabled</li>
+ *   <li>jobs.dashboard.https.keystoreFilePath / jobs.dashboard.https.keystorePassword - required when https enabled</li>
  *   <li>jobs.dashboard.auth.enabled = false - fronts the dashboard with Keycloak-issued bearer
  *       token verification via {@link uk.gov.dbt.ndtp.federator.client.jobs.auth.JobRunnerAuthGateway},
  *       listening on its own jobs.dashboard.auth.port and forwarding to jobs.dashboard.port (which
@@ -86,8 +85,8 @@ public final class DefaultJobSchedulerProvider implements JobSchedulerProvider {
     // jobs.dashboard.port becomes an internal-only port and this proxy fronts it with HTTPS.
     private static final String PROP_DASHBOARD_HTTPS_ENABLED = "jobs.dashboard.https.enabled";
     private static final String PROP_DASHBOARD_HTTPS_PORT = "jobs.dashboard.https.port";
-    private static final String PROP_DASHBOARD_HTTPS_CERT_FILE_PATH = "jobs.dashboard.https.certFilePath";
-    private static final String PROP_DASHBOARD_HTTPS_KEY_FILE_PATH = "jobs.dashboard.https.keyFilePath";
+    private static final String PROP_DASHBOARD_HTTPS_KEYSTORE_FILE_PATH = "jobs.dashboard.https.keystoreFilePath";
+    private static final String PROP_DASHBOARD_HTTPS_KEYSTORE_PASSWORD = "jobs.dashboard.https.keystorePassword";
     // Reused (not duplicated) so the auth gateway's JWKS fetch trusts whatever internal CA the
     // client's own mTLS truststore already trusts - e.g. an in-cluster Keycloak issuer signed by a
     // private CA that the JDK default trust store wouldn't otherwise recognise.
@@ -204,12 +203,11 @@ public final class DefaultJobSchedulerProvider implements JobSchedulerProvider {
                     && PropertyUtil.getPropertyBooleanValue(PROP_DASHBOARD_HTTPS_ENABLED, "false");
             if (dashboardHttpsEnabled) {
                 int httpsPort = PropertyUtil.getPropertyIntValue(PROP_DASHBOARD_HTTPS_PORT, "8443");
-                String certFilePath = PropertyUtil.getPropertyValue(PROP_DASHBOARD_HTTPS_CERT_FILE_PATH);
-                String keyFilePath = PropertyUtil.getPropertyValue(PROP_DASHBOARD_HTTPS_KEY_FILE_PATH);
-                KeyManager[] keyManagers = SSLUtils.createKeyManagerFromPem(certFilePath, keyFilePath);
+                String keystoreFilePath = PropertyUtil.getPropertyValue(PROP_DASHBOARD_HTTPS_KEYSTORE_FILE_PATH);
+                String keystorePassword = PropertyUtil.getPropertyValue(PROP_DASHBOARD_HTTPS_KEYSTORE_PASSWORD);
                 // Chain to the auth gateway when it's also enabled, otherwise straight to the dashboard.
                 int httpsUpstreamPort = dashboardAuthEnabled ? authProperties.getGatewayPort() : dashboardPort;
-                httpsDashboardProxy = new HttpsDashboardProxy(httpsPort, httpsUpstreamPort, keyManagers);
+                httpsDashboardProxy = new HttpsDashboardProxy(httpsPort, httpsUpstreamPort, keystoreFilePath, keystorePassword);
                 httpsDashboardProxy.start();
             }
 
