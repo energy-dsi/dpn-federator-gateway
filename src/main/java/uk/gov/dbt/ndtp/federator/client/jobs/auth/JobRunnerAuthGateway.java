@@ -102,8 +102,22 @@ public class JobRunnerAuthGateway {
 
     private static final Set<String> READ_ONLY_HTTP_METHODS = Set.of("GET", "HEAD", "OPTIONS");
 
+    // Browsers request this automatically alongside any page load, before the page itself (and
+    // therefore before any redirect-driven auth) has a chance to run. If it were allowed through
+    // the normal flow below, it would trigger its own login redirect and overwrite the single
+    // stateless jobrunr_oidc_state cookie with an unrelated state value, breaking whichever login
+    // attempt (the real page's, or this one) completes second - surfacing as "missing or
+    // mismatched state" on the real callback even though Keycloak echoed the state back
+    // correctly. Short-circuit it before any auth/redirect logic runs.
+    private static final String FAVICON_PATH = "/favicon.ico";
+
     private void handle(HttpExchange exchange) {
         try {
+            if (FAVICON_PATH.equals(exchange.getRequestURI().getPath())) {
+                sendError(exchange, 404, "Not Found");
+                return;
+            }
+
             if (oidcLoginFlow != null && oidcLoginFlow.isCallback(exchange)) {
                 oidcLoginFlow.handleCallback(exchange);
                 return;
