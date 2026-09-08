@@ -21,6 +21,7 @@ import java.util.Base64;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.function.Supplier;
 import lombok.extern.slf4j.Slf4j;
 import uk.gov.dbt.ndtp.federator.common.utils.ObjectMapperUtil;
@@ -35,15 +36,38 @@ import uk.gov.dbt.ndtp.federator.common.utils.ObjectMapperUtil;
  * access token, which is then stored in an HttpOnly cookie so subsequent requests carry it
  * automatically. {@link BearerTokenVerifier} validates that token exactly as it would a bearer
  * header - this class only handles obtaining and storing it.
+ * <p>
+ * A Keycloak-issued refresh token is stashed in its own longer-lived cookie so
+ * {@link JobRunnerAuthGateway} can silently renew an expired access token (see {@link
+ * #tryRefresh(HttpExchange)}) instead of forcing a full re-login on every short-lived access
+ * token expiry - without this, the JobRunr dashboard's background polling (SSE, static assets)
+ * would just keep failing silently once the access token cookie expired, with a full page reload
+ * being the only way to recover.
  */
 @Slf4j
 public final class OidcLoginFlow {
 
     private static final String STATE_COOKIE_NAME = "jobrunr_oidc_state";
+    private static final String REFRESH_COOKIE_NAME = "jobrunr_oidc_refresh";
+    // Keycloak's default SSO session idle timeout, used only when a refresh response omits
+    // refresh_expires_in (some grant/policy combinations don't return it).
+    private static final long DEFAULT_REFRESH_EXPIRY_SECONDS = 1800L;
     private static final SecureRandom RANDOM = new SecureRandom();
 
     private final JobRunnerAuthProperties config;
     private final Supplier<HttpClient> httpClientSupplier;
+
+    // Collapses concurrent refresh attempts for the same refresh token into a single Keycloak
+    // call - several requests (SSE reconnect, static assets, API polling) can all notice the
+    // access token expired at almost the same moment. Bounded by age, not just token equality,
+    // since Keycloak may not rotate the refresh token on every use - without the age check a
+    // long-lived, unrotated refresh token would make this cache serve one stale access token
+    // forever instead of ever calling Keycloak again.
+    private static final long REFRESH_DEDUPE_WINDOW_MILLIS = 10_000L;
+    private final Object refreshLock = new Object();
+    private String lastRefreshedRefreshToken;
+    private Map<String, Object> lastRefreshResult;
+    private long lastRefreshedAtMillis;
 
     public OidcLoginFlow(JobRunnerAuthProperties config, Supplier<HttpClient> httpClientSupplier) {
         this.config = config;
@@ -90,16 +114,14 @@ public final class OidcLoginFlow {
         }
 
         String originalPath = decodeOriginalPath(stateCookie);
-        String accessToken;
-        long expiresInSeconds;
+        Map<String, Object> tokenResponse;
         try {
-            Map<String, Object> tokenResponse = exchangeCodeForToken(code);
-            accessToken = (String) tokenResponse.get("access_token");
-            Object expiresIn = tokenResponse.get("expires_in");
-            expiresInSeconds = expiresIn instanceof Number number ? number.longValue() : 3600L;
-            if (accessToken == null) {
-                throw new IllegalStateException("Token response did not contain an access_token");
-            }
+            String redirectUri = config.getOidcPublicBaseUrl() + config.getOidcRedirectPath();
+            tokenResponse = postToTokenEndpoint("grant_type=authorization_code"
+                    + "&code=" + encode(code)
+                    + "&redirect_uri=" + encode(redirectUri)
+                    + "&client_id=" + encode(config.getOidcClientId())
+                    + "&client_secret=" + encode(config.getOidcClientSecret()));
         } catch (Exception e) {
             log.warn("OIDC token exchange failed: {}", e.getMessage());
             sendPlainText(exchange, 502, "Failed to complete Keycloak login");
@@ -107,20 +129,75 @@ public final class OidcLoginFlow {
         }
 
         exchange.getResponseHeaders().add("Set-Cookie", buildCookie(STATE_COOKIE_NAME, "", 0));
-        exchange.getResponseHeaders().add(
-                "Set-Cookie", buildCookie(config.getOidcCookieName(), accessToken, (int) expiresInSeconds));
+        applyTokenCookies(exchange, tokenResponse);
         exchange.getResponseHeaders().add("Location", originalPath);
         exchange.sendResponseHeaders(302, -1);
     }
 
-    private Map<String, Object> exchangeCodeForToken(String code) throws IOException, InterruptedException {
-        String redirectUri = config.getOidcPublicBaseUrl() + config.getOidcRedirectPath();
-        String form = "grant_type=authorization_code"
-                + "&code=" + encode(code)
-                + "&redirect_uri=" + encode(redirectUri)
-                + "&client_id=" + encode(config.getOidcClientId())
-                + "&client_secret=" + encode(config.getOidcClientSecret());
+    /**
+     * Silently exchanges the browser's refresh-token cookie (if any) for a fresh access token,
+     * setting the renewed cookies on {@code exchange} exactly as a full login would. Returns
+     * empty (having cleared the refresh cookie) when there is no refresh cookie, it has expired,
+     * or Keycloak otherwise rejects it - callers should fall back to a normal login redirect.
+     */
+    Optional<String> tryRefresh(HttpExchange exchange) {
+        String refreshToken = readCookie(exchange, REFRESH_COOKIE_NAME);
+        if (refreshToken == null || refreshToken.isBlank()) {
+            return Optional.empty();
+        }
 
+        Map<String, Object> tokenResponse;
+        synchronized (refreshLock) {
+            boolean withinDedupeWindow = System.currentTimeMillis() - lastRefreshedAtMillis < REFRESH_DEDUPE_WINDOW_MILLIS;
+            if (withinDedupeWindow && refreshToken.equals(lastRefreshedRefreshToken) && lastRefreshResult != null) {
+                tokenResponse = lastRefreshResult;
+            } else {
+                try {
+                    tokenResponse = postToTokenEndpoint("grant_type=refresh_token"
+                            + "&refresh_token=" + encode(refreshToken)
+                            + "&client_id=" + encode(config.getOidcClientId())
+                            + "&client_secret=" + encode(config.getOidcClientSecret()));
+                } catch (Exception e) {
+                    log.debug("Silent Job Runner token refresh failed: {}", e.getMessage());
+                    lastRefreshedRefreshToken = null;
+                    lastRefreshResult = null;
+                    exchange.getResponseHeaders().add("Set-Cookie", buildCookie(REFRESH_COOKIE_NAME, "", 0));
+                    return Optional.empty();
+                }
+                lastRefreshedRefreshToken = refreshToken;
+                lastRefreshResult = tokenResponse;
+                lastRefreshedAtMillis = System.currentTimeMillis();
+            }
+        }
+
+        String accessToken = applyTokenCookies(exchange, tokenResponse);
+        return Optional.ofNullable(accessToken);
+    }
+
+    /** Sets the access-token (and, if present, rotated refresh-token) cookies from a token response. */
+    private String applyTokenCookies(HttpExchange exchange, Map<String, Object> tokenResponse) {
+        String accessToken = (String) tokenResponse.get("access_token");
+        if (accessToken == null) {
+            throw new IllegalStateException("Token response did not contain an access_token");
+        }
+        long expiresInSeconds = asLong(tokenResponse.get("expires_in"), 3600L);
+        exchange.getResponseHeaders().add(
+                "Set-Cookie", buildCookie(config.getOidcCookieName(), accessToken, (int) expiresInSeconds));
+
+        String refreshToken = (String) tokenResponse.get("refresh_token");
+        if (refreshToken != null) {
+            long refreshExpiresInSeconds = asLong(tokenResponse.get("refresh_expires_in"), DEFAULT_REFRESH_EXPIRY_SECONDS);
+            exchange.getResponseHeaders().add(
+                    "Set-Cookie", buildCookie(REFRESH_COOKIE_NAME, refreshToken, (int) refreshExpiresInSeconds));
+        }
+        return accessToken;
+    }
+
+    private static long asLong(Object value, long fallback) {
+        return value instanceof Number number ? number.longValue() : fallback;
+    }
+
+    private Map<String, Object> postToTokenEndpoint(String form) throws IOException, InterruptedException {
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(config.getTokenEndpoint()))
                 .header("Content-Type", "application/x-www-form-urlencoded")
