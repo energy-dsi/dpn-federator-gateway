@@ -45,13 +45,40 @@ public class HttpClientFactoryUtils {
     }
 
     public static HttpClient createHttpClient(Properties properties) {
+        return createHttpClient(properties, "idp.");
+    }
+
+    /**
+     * Like {@link #createHttpClient(Properties)}, but reads the truststore for a specific
+     * Keycloak client identified by {@code propertyPrefix} (e.g. "redis.idp." instead of the
+     * default "idp."). Falls back to the "idp." truststore if no prefix-specific truststore is
+     * configured, since by default no separate certificate/truststore is provisioned for
+     * secondary Keycloak clients (see common-configuration.properties) - this keeps existing
+     * deployments working unchanged while allowing an explicit override per client.
+     *
+     * @param propertyPrefix the property name prefix identifying which client's truststore to use.
+     */
+    public static HttpClient createHttpClient(Properties properties, String propertyPrefix) {
         try {
-            String truststorePath = properties.getProperty("idp.truststore.path");
-            String truststorePassword = properties.getProperty("idp.truststore.password");
+            String truststorePath = resolveWithIdpFallback(properties, propertyPrefix, "truststore.path");
+            String truststorePassword = resolveWithIdpFallback(properties, propertyPrefix, "truststore.password");
             SSLContext sslContext = SSLUtils.createSSLContextWithTrustStore(truststorePath, truststorePassword);
             return HttpClient.newBuilder().sslContext(sslContext).build();
         } catch (Exception e) {
             throw new FederatorSslException("Failed to create HttpClient", e);
         }
+    }
+
+    /**
+     * Reads {@code propertyPrefix + suffix}; if that's blank/missing and propertyPrefix isn't
+     * already "idp.", falls back to {@code "idp." + suffix} so clients without their own
+     * dedicated truststore configured keep using the shared one.
+     */
+    private static String resolveWithIdpFallback(Properties properties, String propertyPrefix, String suffix) {
+        String value = properties.getProperty(propertyPrefix + suffix);
+        if ((value == null || value.isBlank()) && !"idp.".equals(propertyPrefix)) {
+            value = properties.getProperty("idp." + suffix);
+        }
+        return value;
     }
 }

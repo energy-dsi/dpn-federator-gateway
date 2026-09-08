@@ -108,7 +108,7 @@ public class GRPCFileClient extends GRPCAbstractClient {
      * @throws FileAssemblyException if validation fails
      */
     private void validatePrerequisites(String topic, String destination) {
-        RedisUtil.getInstance();
+        RedisUtil.getKeycloakGatedInstance();
         log.debug("Redis connectivity check passed");
 
         if (destination == null || destination.isBlank()) {
@@ -249,6 +249,6 @@ public class GRPCFileClient extends GRPCAbstractClient {
      * @param nextOffset offset to save
      */
     private void saveOffsetToRedis(String topic, long nextOffset) {
-        RedisUtil.getInstance().setOffset(getRedisPrefix(), topic, nextOffset);
+        RedisUtil.getKeycloakGatedInstance().setOffset(getRedisPrefix(), topic, nextOffset);
     }
 }

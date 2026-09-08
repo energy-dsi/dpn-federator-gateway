@@ -269,19 +269,34 @@ public final class DefaultJobSchedulerProvider implements JobSchedulerProvider {
 
     /**
      * Builds the HttpClient trust source shared by the auth gateway's JWKS fetch and OIDC token
-     * exchange - both need to trust the Keycloak issuer's TLS certificate, so both reuse whichever
-     * mTLS trust source the rest of the client already uses: Vault-sourced trust material, then
-     * {@code client.truststoreFilePath}, then the {@code jobs.dashboard.auth.trustStore*} system
-     * properties BearerTokenVerifier's own default constructor falls back to (see
-     * {@code BearerTokenVerifier.trustStoreSslContext()} - mirrored here so OidcLoginFlow's
-     * token-endpoint call gets that same isolated trust, not just the JWKS fetch). Returns null
-     * when none of these are configured, so callers fall back to their own default (JDK trust
-     * store) - preserving prior behaviour for issuers with a publicly-trusted certificate (or
-     * plain HTTP, e.g. local testing).
+     * exchange - both need to trust the Keycloak issuer's TLS certificate. Tried in order:
+     * <ol>
+     *   <li>{@code jobs.dashboard.auth.trustStore*} system properties - a dedicated trust store
+     *       isolated from anything else in the process, proven (via direct testing) to contain the
+     *       CA that signs the Keycloak issuer's certificate. Populated in Azure from the same Kafka
+     *       truststore secret via {@code -D} flags in {@code federator-client-deployment.yaml}.</li>
+     *   <li>{@code client.truststoreFilePath} - the same file-based mTLS truststore local testing
+     *       uses (see {@code client-bcc.properties}), when the dedicated property above isn't set.</li>
+     *   <li>Vault-sourced trust material, when {@link VaultTlsSupport#isVaultTlsEnabled()} - kept as
+     *       a last resort only: it's scoped to federator's own internal gRPC mTLS PKI
+     *       (node-net/client), not necessarily the separate cert-manager-issued chain Keycloak
+     *       uses, so it's tried only when neither of the above is configured.</li>
+     * </ol>
+     * Returns null when none of these are configured, so callers fall back to their own default
+     * (JDK trust store) - preserving prior behaviour for issuers with a publicly-trusted
+     * certificate (or plain HTTP, e.g. local testing).
      */
     private Supplier<java.net.http.HttpClient> buildAuthHttpClientSupplier() {
-        if (VaultTlsSupport.isVaultTlsEnabled()) {
-            SSLContext sslContext = trustOnlySslContext(VaultTlsSupport.trustManagers());
+        // Dedicated jobs.dashboard.auth.trustStore checked first, ahead of Vault: it's proven
+        // (via direct testing) to contain the CA that signs the Keycloak issuer's certificate,
+        // whereas Vault's trust material is scoped to federator's own internal gRPC mTLS PKI
+        // (node-net/client) and does not necessarily cover a separate cert-manager-issued chain
+        // like Keycloak's. This also matches local testing (client.truststoreFilePath, below),
+        // which works reliably using the JDK's own TrustManagerFactory output directly - same
+        // approach, just a different property/file.
+        String authTrustStorePath = System.getProperty("jobs.dashboard.auth.trustStore");
+        if (authTrustStorePath != null) {
+            SSLContext sslContext = trustOnlySslContext(loadAuthTrustManagers(authTrustStorePath));
             java.net.http.HttpClient httpClient =
                     java.net.http.HttpClient.newBuilder().sslContext(sslContext).build();
             return () -> httpClient;
@@ -294,17 +309,16 @@ public final class DefaultJobSchedulerProvider implements JobSchedulerProvider {
                     java.net.http.HttpClient.newBuilder().sslContext(sslContext).build();
             return () -> httpClient;
         }
-        String authTrustStorePath = System.getProperty("jobs.dashboard.auth.trustStore");
-        if (authTrustStorePath == null) {
-            return null;
+        if (VaultTlsSupport.isVaultTlsEnabled()) {
+            SSLContext sslContext = trustOnlySslContext(VaultTlsSupport.trustManagers());
+            java.net.http.HttpClient httpClient =
+                    java.net.http.HttpClient.newBuilder().sslContext(sslContext).build();
+            return () -> httpClient;
         }
-        SSLContext sslContext = authTrustStoreSslContext(authTrustStorePath);
-        java.net.http.HttpClient httpClient =
-                java.net.http.HttpClient.newBuilder().sslContext(sslContext).build();
-        return () -> httpClient;
+        return null;
     }
 
-    private static SSLContext authTrustStoreSslContext(String trustStorePath) {
+    private static TrustManager[] loadAuthTrustManagers(String trustStorePath) {
         try {
             String trustStoreType =
                     System.getProperty("jobs.dashboard.auth.trustStoreType", java.security.KeyStore.getDefaultType());
@@ -316,12 +330,10 @@ public final class DefaultJobSchedulerProvider implements JobSchedulerProvider {
             javax.net.ssl.TrustManagerFactory tmf =
                     javax.net.ssl.TrustManagerFactory.getInstance(javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm());
             tmf.init(trustStore);
-            SSLContext ctx = SSLContext.getInstance("TLS");
-            ctx.init(null, tmf.getTrustManagers(), null);
-            return ctx;
+            return tmf.getTrustManagers();
         } catch (Exception e) {
             throw new FederatorSslException(
-                    "Failed to build SSLContext from jobs.dashboard.auth.trustStore=" + trustStorePath, e);
+                    "Failed to load trust managers from jobs.dashboard.auth.trustStore=" + trustStorePath, e);
         }
     }
 
@@ -331,7 +343,7 @@ public final class DefaultJobSchedulerProvider implements JobSchedulerProvider {
             sslContext.init(null, trustManagers, null);
             return sslContext;
         } catch (Exception e) {
-            throw new FederatorSslException("Failed to create SSLContext from Vault trust material.", e);
+            throw new FederatorSslException("Failed to create SSLContext from trust material.", e);
         }
     }
 

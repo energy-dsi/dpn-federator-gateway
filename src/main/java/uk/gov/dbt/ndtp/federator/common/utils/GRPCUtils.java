@@ -93,6 +93,38 @@ public class GRPCUtils {
     }
 
     /**
+     * Builds a second, independent {@link IdpTokenService} for gating Redis access via
+     * {@code KeycloakSessionGuard}, pointed at a dedicated Keycloak client separate from the
+     * one used for the management-node connection ({@link #createIdpTokenService()}).
+     * <p>
+     * Reads its client identity (token URL, JWKS URL, client ID, client secret) from the SAME
+     * common-configuration.properties file, under the "redis.idp." property prefix instead of
+     * "idp." - no second properties file is used.
+     * </p>
+     * <p>
+     * Uses plain client-secret authentication (no mTLS) since the redis-gating client doesn't
+     * have its own client certificate provisioned - {@code IdpTokenServiceMtlsImpl}'s request
+     * body already sent the client secret over the wire regardless, so mTLS added transport-level
+     * overhead without adding real auth strength here, and it silently reused the "idp."-prefixed
+     * mTLS keystore/truststore since {@code createHttpClientWithMtls} always reads that specific
+     * prefix. This uses the prefix-aware {@link HttpClientFactoryUtils#createHttpClient(Properties, String)}
+     * instead, which reads "redis.idp.truststore.*" first, falling back to "idp.truststore.*" only
+     * if no dedicated truststore is configured for this client.
+     * </p>
+     */
+    public static IdpTokenService createRedisIdpTokenService() {
+        Properties properties = PropertyUtil.getPropertiesFromFilePath(COMMON_CONFIG_PROPERTIES);
+        ObjectMapper mapper = ObjectMapperUtil.getInstance();
+
+        SecretProvider secretProvider = PropertyUtil.createSecretProvider(properties);
+        PropertyUtil.overrideWithSecrets(properties, secretProvider);
+
+        LOGGER.info("Redis-gating IDP token service using dedicated Keycloak client (client_secret, prefix='redis.idp.')");
+        Supplier<HttpClient> clientSupplier = () -> HttpClientFactoryUtils.createHttpClient(properties, "redis.idp.");
+        return new IdpTokenServiceClientSecretImpl(clientSupplier, mapper, "redis.idp.");
+    }
+
+    /**
      * Generate ChannelCredentials with mTLS. When {@code vault.tls.enabled=true} the identity
      * and trust material are read from Vault in memory; otherwise the client P12 / truststore
      * files are used.

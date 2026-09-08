@@ -431,7 +431,7 @@ public class IdpTokenServicePrivateJwtImpl extends AbstractIdpTokenService {
         if (StringUtils.isBlank(managementNodeId)) {
             managementNodeId = MANAGEMENT_NODE_DEFAULT_ID;
         }
-        return "management_node_" + managementNodeId + "_access_token";
+        return "management_node_" + managementNodeId + "_" + idpClientId + "_access_token";
     }
 
     private static String encode(String value) {

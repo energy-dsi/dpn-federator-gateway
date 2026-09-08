@@ -187,7 +187,13 @@ public class JobRunnerAuthGateway {
     private void proxy(HttpExchange exchange) throws IOException, InterruptedException {
         URI targetUri = upstreamBaseUri.resolve(exchange.getRequestURI());
 
-        HttpRequest.Builder requestBuilder = HttpRequest.newBuilder(targetUri).timeout(Duration.ofSeconds(30));
+        HttpRequest.Builder requestBuilder = HttpRequest.newBuilder(targetUri);
+        // JobRunr's SSE endpoints stream events for as long as the browser tab stays open, so a
+        // blanket 30s timeout here would forcibly cut the connection regardless of network health
+        // (see the identical fix/comment in HttpsDashboardProxy, the other hop in this chain).
+        if (!exchange.getRequestURI().getPath().startsWith("/sse/")) {
+            requestBuilder.timeout(Duration.ofSeconds(30));
+        }
         copyRequestHeaders(exchange, requestBuilder);
 
         byte[] requestBody = exchange.getRequestBody().readAllBytes();
