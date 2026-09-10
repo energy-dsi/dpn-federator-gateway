@@ -19,7 +19,6 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -121,17 +120,6 @@ public class JobRunnerAuthGateway {
                     : (oidcLoginFlow != null ? OidcLoginFlow.readCookie(exchange, config.getOidcCookieName()) : null);
 
             AuthResult authResult = verifier.verify(token);
-            if (!authResult.authorized() && viaBrowserSession) {
-                // The access-token cookie is short-lived (matches Keycloak's own token TTL) and
-                // is never proactively renewed by the browser - without this, JobRunr's
-                // background polling (SSE, static assets) starts failing silently the moment it
-                // expires, and only a full page reload (fresh login) recovers.
-                Optional<String> refreshedToken = oidcLoginFlow.tryRefresh(exchange);
-                if (refreshedToken.isPresent()) {
-                    token = refreshedToken.get();
-                    authResult = verifier.verify(token);
-                }
-            }
             if (!authResult.authorized()) {
                 log.debug("Rejected Job Runner UI request from {}: {}", exchange.getRemoteAddress(), authResult.reason());
                 if (viaBrowserSession) {
