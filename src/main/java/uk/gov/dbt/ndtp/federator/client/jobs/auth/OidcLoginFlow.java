@@ -129,7 +129,12 @@ public final class OidcLoginFlow {
                 .build();
         HttpResponse<String> response = httpClientSupplier.get().send(request, HttpResponse.BodyHandlers.ofString());
         if (response.statusCode() != 200) {
-            throw new IllegalStateException("Token endpoint returned HTTP " + response.statusCode());
+            // Keycloak's error body (e.g. {"error":"invalid_grant","error_description":"Code not
+            // valid"}) never echoes back the code or client_secret, so it's safe to include here -
+            // without it, every failure just says "HTTP 400" with no way to tell an expired/reused
+            // code from a client-secret mismatch or a redirect_uri mismatch.
+            throw new IllegalStateException(
+                    "Token endpoint returned HTTP " + response.statusCode() + ": " + truncate(response.body()));
         }
         return ObjectMapperUtil.getInstance().readValue(response.body(), new TypeReference<Map<String, Object>>() {});
     }
@@ -214,5 +219,12 @@ public final class OidcLoginFlow {
 
     private static String encode(String value) {
         return URLEncoder.encode(value, StandardCharsets.UTF_8);
+    }
+
+    private static String truncate(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value.length() > 500 ? value.substring(0, 500) + "...(truncated)" : value;
     }
 }
