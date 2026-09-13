@@ -120,6 +120,19 @@ public class JobRunnerAuthGateway {
                     : (oidcLoginFlow != null ? OidcLoginFlow.readCookie(exchange, config.getOidcCookieName()) : null);
 
             AuthResult authResult = verifier.verify(token);
+            if (!authResult.authorized() && oidcLoginFlow != null) {
+                // The access token is missing/expired/invalid - before falling back to a visible
+                // redirect (which a background fetch()/EventSource call from the dashboard's own
+                // SPA can't follow: it lands on a cross-origin Keycloak page with no CORS headers
+                // and just fails), try to silently mint a new one from the refresh token cookie.
+                // Common case: the access token merely expired mid-session while the refresh token
+                // (typically much longer-lived) is still valid - this resolves entirely within one
+                // request/response, with no visible redirect and no interruption to the caller.
+                String refreshedToken = oidcLoginFlow.tryRefresh(exchange);
+                if (refreshedToken != null) {
+                    authResult = verifier.verify(refreshedToken);
+                }
+            }
             if (!authResult.authorized()) {
                 log.debug("Rejected Job Runner UI request from {}: {}", exchange.getRemoteAddress(), authResult.reason());
                 if (viaBrowserSession) {
