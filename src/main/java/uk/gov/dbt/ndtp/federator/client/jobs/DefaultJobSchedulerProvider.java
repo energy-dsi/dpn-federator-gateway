@@ -4,6 +4,7 @@
 
 package uk.gov.dbt.ndtp.federator.client.jobs;
 
+import java.time.Duration;
 import java.time.ZoneId;
 import java.util.List;
 import java.util.Map;
@@ -92,6 +93,13 @@ public final class DefaultJobSchedulerProvider implements JobSchedulerProvider {
     // private CA that the JDK default trust store wouldn't otherwise recognise.
     private static final String PROP_CLIENT_TRUSTSTORE_FILE_PATH = "client.truststoreFilePath";
     private static final String PROP_CLIENT_TRUSTSTORE_PASSWORD = "client.truststorePassword";
+    // Bounds connection setup for the JWKS fetch (BearerTokenVerifier) and the OIDC token-endpoint
+    // call (OidcLoginFlow) sharing this client. Without it, a slow/unreachable Keycloak can block
+    // JobRunnerAuthGateway's request-handling thread well past the 30s timeout HttpsDashboardProxy
+    // and JobRunnerAuthGateway.proxy() already enforce on themselves - by the time the blocked call
+    // finally returns, the caller has already given up and closed its connection, surfacing as a
+    // "Broken pipe" when the (by then pointless) response is written back.
+    private static final Duration AUTH_HTTP_CONNECT_TIMEOUT = Duration.ofSeconds(10);
     private final Object lifecycleLock = new Object();
     private boolean started = false;
     // Keep reference so we can close when stopping (for in-memory case)
@@ -295,22 +303,28 @@ public final class DefaultJobSchedulerProvider implements JobSchedulerProvider {
         String authTrustStorePath = System.getProperty("jobs.dashboard.auth.trustStore");
         if (authTrustStorePath != null) {
             SSLContext sslContext = trustOnlySslContext(loadAuthTrustManagers(authTrustStorePath));
-            java.net.http.HttpClient httpClient =
-                    java.net.http.HttpClient.newBuilder().sslContext(sslContext).build();
+            java.net.http.HttpClient httpClient = java.net.http.HttpClient.newBuilder()
+                    .connectTimeout(AUTH_HTTP_CONNECT_TIMEOUT)
+                    .sslContext(sslContext)
+                    .build();
             return () -> httpClient;
         }
         String truststorePath = PropertyUtil.getPropertyValue(PROP_CLIENT_TRUSTSTORE_FILE_PATH, "");
         if (!truststorePath.isBlank()) {
             String truststorePassword = PropertyUtil.getPropertyValue(PROP_CLIENT_TRUSTSTORE_PASSWORD, "");
             SSLContext sslContext = SSLUtils.createSSLContextWithTrustStore(truststorePath, truststorePassword);
-            java.net.http.HttpClient httpClient =
-                    java.net.http.HttpClient.newBuilder().sslContext(sslContext).build();
+            java.net.http.HttpClient httpClient = java.net.http.HttpClient.newBuilder()
+                    .connectTimeout(AUTH_HTTP_CONNECT_TIMEOUT)
+                    .sslContext(sslContext)
+                    .build();
             return () -> httpClient;
         }
         if (VaultTlsSupport.isVaultTlsEnabled()) {
             SSLContext sslContext = trustOnlySslContext(VaultTlsSupport.trustManagers());
-            java.net.http.HttpClient httpClient =
-                    java.net.http.HttpClient.newBuilder().sslContext(sslContext).build();
+            java.net.http.HttpClient httpClient = java.net.http.HttpClient.newBuilder()
+                    .connectTimeout(AUTH_HTTP_CONNECT_TIMEOUT)
+                    .sslContext(sslContext)
+                    .build();
             return () -> httpClient;
         }
         return null;

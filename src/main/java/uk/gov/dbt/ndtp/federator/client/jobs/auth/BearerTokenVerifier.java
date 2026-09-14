@@ -58,8 +58,17 @@ public class BearerTokenVerifier {
     private volatile JWKSet cachedJwkSet;
     private volatile Instant cacheExpiresAt = Instant.EPOCH;
 
+    // Bounds both the JWKS fetch's connection setup and its response wait (see the .timeout(...)
+    // call in refreshJwks()) - without these, a slow/unreachable JWKS endpoint can block a request
+    // for as long as the OS TCP stack allows, well past the timeouts every other hop in this proxy
+    // chain (HttpsDashboardProxy, JobRunnerAuthGateway.proxy()) already enforces on itself, causing
+    // the caller to give up and close its connection while this fetch is still in flight - surfacing
+    // downstream as a confusing "Broken pipe" when the response is finally written back.
+    private static final Duration HTTP_CLIENT_TIMEOUT = Duration.ofSeconds(10);
+
     public BearerTokenVerifier(JobRunnerAuthProperties config) {
         this(config, () -> HttpClient.newBuilder()
+                .connectTimeout(HTTP_CLIENT_TIMEOUT)
                 .sslContext(trustStoreSslContext())
                 .build());
     }
@@ -249,8 +258,11 @@ public class BearerTokenVerifier {
 
     private synchronized JWKSet refreshJwks() {
         try {
-            HttpRequest request =
-                    HttpRequest.newBuilder().uri(URI.create(config.getJwksUrl())).GET().build();
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(config.getJwksUrl()))
+                    .timeout(HTTP_CLIENT_TIMEOUT)
+                    .GET()
+                    .build();
             HttpResponse<String> response =
                     httpClientSupplier.get().send(request, HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() != 200) {
