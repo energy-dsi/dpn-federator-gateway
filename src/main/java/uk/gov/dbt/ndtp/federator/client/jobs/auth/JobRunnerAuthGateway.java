@@ -44,6 +44,23 @@ public class JobRunnerAuthGateway {
     private static final Set<String> HOP_BY_HOP_RESPONSE_HEADERS =
             Set.of("connection", "content-length", "keep-alive", "transfer-encoding");
 
+    // Non-sensitive static assets the dashboard's own HTML references (e.g. the PWA manifest
+    // linked from <head>) that the browser may fetch before - or without ever completing - a
+    // login. These are proxied straight through with no auth check at all: unlike the rest of
+    // the dashboard, there's no reason to gate them, and gating them anyway forces every such
+    // fetch through the same redirect-to-Keycloak path a background fetch()/EventSource call
+    // can never complete (Keycloak's login page has no CORS headers, so the browser reports a
+    // confusing "blocked by CORS policy" error instead of a clean, expected failure).
+    private static final Set<String> PUBLIC_ASSET_SUFFIXES = Set.of("/manifest.json", "/favicon.ico");
+
+    // Fetch Metadata header browsers (Chromium, Firefox) attach to every request, distinguishing
+    // a real top-level page navigation ("navigate") from anything else a page itself triggers
+    // (fetch/XHR/EventSource/manifest/etc: "cors"/"no-cors"/"same-origin"). Safari does not send
+    // this header at all, so its absence is treated conservatively as "assume navigation" below,
+    // preserving today's behaviour for that case rather than risking blocking a real page load.
+    private static final String SEC_FETCH_MODE_HEADER = "Sec-Fetch-Mode";
+    private static final String SEC_FETCH_MODE_NAVIGATE = "navigate";
+
     private final int publicPort;
     private final JobRunnerAuthProperties config;
     private final BearerTokenVerifier verifier;
@@ -123,17 +140,41 @@ public class JobRunnerAuthGateway {
                 return;
             }
 
+            if (isPublicAsset(exchange)) {
+                proxy(exchange);
+                return;
+            }
+
             String headerToken = extractToken(firstHeader(exchange.getRequestHeaders(), config.getHeaderName()));
-            // A caller presenting no bearer header at all is treated as a browser: eligible for
-            // redirect-to-login (via a cookie, once logged in) rather than a bare 401. A caller
-            // that does present the header is treated as an API client - always a plain 401/403
-            // on failure, even when browser login is also configured.
-            boolean viaBrowserSession = headerToken == null && oidcLoginFlow != null;
+            // A caller presenting no bearer header at all, on what looks like a real top-level
+            // page navigation, is treated as a browser: eligible for redirect-to-login (via a
+            // cookie, once logged in) rather than a bare 401. A caller that does present the
+            // header is treated as an API client - always a plain 401/403 on failure, even when
+            // browser login is also configured. Likewise, anything the Sec-Fetch-Mode header
+            // positively identifies as NOT a navigation (a background fetch()/EventSource/etc.
+            // call from the dashboard's own SPA) is also treated as an API-style caller: it could
+            // never usefully follow a redirect to Keycloak's cross-origin login page anyway (the
+            // browser blocks reading that response - no CORS headers - reporting a confusing
+            // "blocked by CORS policy" error instead of the plain, expected 401 this produces).
+            boolean viaBrowserSession = headerToken == null && oidcLoginFlow != null && isLikelyNavigation(exchange);
             String token = headerToken != null
                     ? headerToken
                     : (oidcLoginFlow != null ? OidcLoginFlow.readCookie(exchange, config.getOidcCookieName()) : null);
 
             AuthResult authResult = verifier.verify(token);
+            if (!authResult.authorized() && oidcLoginFlow != null) {
+                // The access token is missing/expired/invalid - before falling back to a visible
+                // redirect (which a background fetch()/EventSource call from the dashboard's own
+                // SPA can't follow: it lands on a cross-origin Keycloak page with no CORS headers
+                // and just fails), try to silently mint a new one from the refresh token cookie.
+                // Common case: the access token merely expired mid-session while the refresh token
+                // (typically much longer-lived) is still valid - this resolves entirely within one
+                // request/response, with no visible redirect and no interruption to the caller.
+                String refreshedToken = oidcLoginFlow.tryRefresh(exchange);
+                if (refreshedToken != null) {
+                    authResult = verifier.verify(refreshedToken);
+                }
+            }
             if (!authResult.authorized()) {
                 log.debug("Rejected Job Runner UI request from {}: {}", exchange.getRemoteAddress(), authResult.reason());
                 if (viaBrowserSession) {
@@ -167,6 +208,28 @@ public class JobRunnerAuthGateway {
         } finally {
             exchange.close();
         }
+    }
+
+    /**
+     * True for non-sensitive static assets (see {@link #PUBLIC_ASSET_SUFFIXES}) that should be
+     * served without any auth check at all, regardless of browser or request mode.
+     */
+    private boolean isPublicAsset(HttpExchange exchange) {
+        String path = exchange.getRequestURI().getPath();
+        return PUBLIC_ASSET_SUFFIXES.stream().anyMatch(path::endsWith);
+    }
+
+    /**
+     * True unless the {@code Sec-Fetch-Mode} header positively identifies this request as NOT a
+     * top-level page navigation. Its absence (e.g. Safari, which never sends Fetch Metadata
+     * headers, or any other client that strips it) is treated as "assume navigation" - this only
+     * ever narrows which requests are eligible for redirect-to-login, never broadens it, so an
+     * unrecognised client falls back to exactly today's behaviour rather than risking a real page
+     * load being wrongly denied a redirect.
+     */
+    private boolean isLikelyNavigation(HttpExchange exchange) {
+        String secFetchMode = firstHeader(exchange.getRequestHeaders(), SEC_FETCH_MODE_HEADER);
+        return secFetchMode == null || SEC_FETCH_MODE_NAVIGATE.equalsIgnoreCase(secFetchMode);
     }
 
     private String extractToken(String headerValue) {

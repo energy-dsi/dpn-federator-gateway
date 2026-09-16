@@ -53,6 +53,12 @@ public final class JobRunnerAuthProperties {
     public static final String PROP_OIDC_SCOPE = "jobs.dashboard.auth.oidc.scope";
     public static final String PROP_OIDC_COOKIE_NAME = "jobs.dashboard.auth.oidc.cookie.name";
     public static final String PROP_OIDC_COOKIE_SECURE = "jobs.dashboard.auth.oidc.cookie.secure";
+    // Cookie the refresh token (if Keycloak issues one) is stored in, so JobRunnerAuthGateway can
+    // silently mint a new access token via grant_type=refresh_token when the access token expires,
+    // instead of always falling back to a visible redirect - which a background fetch()/EventSource
+    // call from the dashboard's own SPA can't follow anyway (it lands on a cross-origin Keycloak
+    // page with no CORS headers).
+    public static final String PROP_OIDC_REFRESH_COOKIE_NAME = "jobs.dashboard.auth.oidc.refresh.cookie.name";
     // Public URL the browser actually uses to reach the dashboard (e.g. through
     // HttpsDashboardProxy) - the gateway itself only ever sees the internal loopback
     // request, so the redirect_uri sent to Keycloak can't be derived from the incoming
@@ -66,6 +72,7 @@ public final class JobRunnerAuthProperties {
     private static final String DEFAULT_OIDC_SCOPE = "openid";
     private static final String DEFAULT_OIDC_COOKIE_NAME = "jobrunr_at";
     private static final String DEFAULT_OIDC_COOKIE_SECURE = "true";
+    private static final String DEFAULT_OIDC_REFRESH_COOKIE_NAME = "jobrunr_rt";
     private static final String OPENID_CERTS_PATH = "/protocol/openid-connect/certs";
     private static final String OPENID_AUTH_PATH = "/protocol/openid-connect/auth";
     private static final String OPENID_TOKEN_PATH = "/protocol/openid-connect/token";
@@ -93,9 +100,12 @@ public final class JobRunnerAuthProperties {
     private final String oidcPublicBaseUrl;
     private final String authorizationEndpoint;
     private final String tokenEndpoint;
+    private final String oidcRefreshCookieName;
 
     // Package-private (rather than private) so tests in this package can build instances directly
-    // without going through PropertyUtil.
+    // without going through PropertyUtil. Delegates to the full constructor below with the default
+    // refresh cookie name, so existing test call sites (predating silent refresh support) don't
+    // need to change.
     JobRunnerAuthProperties(
             boolean enabled,
             String issuerUrl,
@@ -117,6 +127,52 @@ public final class JobRunnerAuthProperties {
             String oidcPublicBaseUrl,
             String authorizationEndpoint,
             String tokenEndpoint) {
+        this(
+                enabled,
+                issuerUrl,
+                jwksUrl,
+                audience,
+                adminRole,
+                readerRole,
+                headerName,
+                headerScheme,
+                jwksCacheTtlSeconds,
+                internalPort,
+                gatewayPort,
+                oidcClientId,
+                oidcClientSecret,
+                oidcRedirectPath,
+                oidcScope,
+                oidcCookieName,
+                oidcCookieSecure,
+                oidcPublicBaseUrl,
+                authorizationEndpoint,
+                tokenEndpoint,
+                DEFAULT_OIDC_REFRESH_COOKIE_NAME);
+    }
+
+    JobRunnerAuthProperties(
+            boolean enabled,
+            String issuerUrl,
+            String jwksUrl,
+            String audience,
+            String adminRole,
+            String readerRole,
+            String headerName,
+            String headerScheme,
+            long jwksCacheTtlSeconds,
+            int internalPort,
+            int gatewayPort,
+            String oidcClientId,
+            String oidcClientSecret,
+            String oidcRedirectPath,
+            String oidcScope,
+            String oidcCookieName,
+            boolean oidcCookieSecure,
+            String oidcPublicBaseUrl,
+            String authorizationEndpoint,
+            String tokenEndpoint,
+            String oidcRefreshCookieName) {
         this.enabled = enabled;
         this.issuerUrl = issuerUrl;
         this.jwksUrl = jwksUrl;
@@ -137,6 +193,7 @@ public final class JobRunnerAuthProperties {
         this.oidcPublicBaseUrl = oidcPublicBaseUrl;
         this.authorizationEndpoint = authorizationEndpoint;
         this.tokenEndpoint = tokenEndpoint;
+        this.oidcRefreshCookieName = oidcRefreshCookieName;
     }
 
     /**
@@ -178,6 +235,8 @@ public final class JobRunnerAuthProperties {
         String oidcPublicBaseUrl = trimToNull(PropertyUtil.getPropertyValue(PROP_OIDC_PUBLIC_BASE_URL, ""));
         String authorizationEndpoint = issuerUrl == null ? null : issuerUrl + OPENID_AUTH_PATH;
         String tokenEndpoint = issuerUrl == null ? null : issuerUrl + OPENID_TOKEN_PATH;
+        String oidcRefreshCookieName =
+                PropertyUtil.getPropertyValue(PROP_OIDC_REFRESH_COOKIE_NAME, DEFAULT_OIDC_REFRESH_COOKIE_NAME);
 
         JobRunnerAuthProperties props = new JobRunnerAuthProperties(
                 enabled,
@@ -199,7 +258,8 @@ public final class JobRunnerAuthProperties {
                 oidcCookieSecure,
                 oidcPublicBaseUrl,
                 authorizationEndpoint,
-                tokenEndpoint);
+                tokenEndpoint,
+                oidcRefreshCookieName);
 
         if (enabled) {
             props.validate();
@@ -318,6 +378,11 @@ public final class JobRunnerAuthProperties {
     /** Public URL the browser uses to reach the dashboard - used to build the redirect_uri. */
     public String getOidcPublicBaseUrl() {
         return oidcPublicBaseUrl;
+    }
+
+    /** Name of the cookie the refresh token (if any) is stored in, for silent token renewal. */
+    public String getOidcRefreshCookieName() {
+        return oidcRefreshCookieName;
     }
 
     /** Keycloak's authorization endpoint, derived from issuer.url. */
