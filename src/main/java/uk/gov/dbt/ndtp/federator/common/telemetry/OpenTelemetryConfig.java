@@ -8,6 +8,9 @@ import io.opentelemetry.instrumentation.logback.appender.v1_0.OpenTelemetryAppen
 import io.opentelemetry.sdk.OpenTelemetrySdk;
 import io.opentelemetry.sdk.autoconfigure.AutoConfiguredOpenTelemetrySdk;
 import io.opentelemetry.sdk.logs.LogRecordProcessor;
+import io.opentelemetry.sdk.logs.export.LogRecordExporter;
+import io.opentelemetry.sdk.metrics.export.MetricExporter;
+import io.opentelemetry.sdk.trace.export.SpanExporter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -25,6 +28,11 @@ import org.slf4j.LoggerFactory;
  *   OTEL_TRACES_SAMPLER            e.g. parentbased_traceidratio
  *   OTEL_TRACES_SAMPLER_ARG        e.g. 0.1
  * </pre>
+ *
+ * <p><b>OTLP authentication:</b> {@code OTEL_EXPORTER_OTLP_OAUTH_ENABLED} (true|false, default
+ * false) attaches an {@code Authorization: Bearer <token>} header to every OTLP HTTP export,
+ * fetched via the {@code dpn-service-client} Keycloak client (the same client Redis-gating and
+ * Kafka auth already use) - see {@link OtlpOAuthSupport}.
  *
  * <p><b>Legacy env var compatibility:</b> ARCHITECTURE.md's own documented Python config example
  * actually uses non-standard names - {@code SERVICE_NAME}, {@code SERVICE_VERSION},
@@ -88,6 +96,11 @@ public final class OpenTelemetryConfig {
             // which case the exporter customizers below are no-ops and autoconfigure's default
             // trust resolution applies unchanged.
             OtlpTruststoreSupport truststore = OtlpTruststoreSupport.resolve();
+            // DSI EDIT (OTLP OAuth): authenticate OTLP export with a Bearer token fetched via
+            // the same idp.* Keycloak client already used for gRPC auth (see OtlpOAuthSupport).
+            // Null when OTEL_EXPORTER_OTLP_OAUTH_ENABLED is unset, in which case the exporter
+            // customizers below are no-ops and export remains unauthenticated as it is today.
+            OtlpOAuthSupport oauth = OtlpOAuthSupport.resolve();
             AutoConfiguredOpenTelemetrySdk autoConfigured = AutoConfiguredOpenTelemetrySdk.builder()
                     // DSI EDIT (log.component fix): stamp "component.name" onto every emitted
                     // log record so Data Prepper's existing component.name -> log.component
@@ -96,12 +109,18 @@ public final class OpenTelemetryConfig {
                     .addLogRecordProcessorCustomizer((delegate, config) ->
                             LogRecordProcessor.composite(
                                     new ComponentNameLogRecordProcessor(componentName), delegate))
-                    .addSpanExporterCustomizer((exporter, config) ->
-                            truststore == null ? exporter : truststore.customizeSpanExporter(exporter))
-                    .addMetricExporterCustomizer((exporter, config) ->
-                            truststore == null ? exporter : truststore.customizeMetricExporter(exporter))
-                    .addLogRecordExporterCustomizer((exporter, config) ->
-                            truststore == null ? exporter : truststore.customizeLogRecordExporter(exporter))
+                    .addSpanExporterCustomizer((exporter, config) -> {
+                        SpanExporter result = truststore == null ? exporter : truststore.customizeSpanExporter(exporter);
+                        return oauth == null ? result : oauth.customizeSpanExporter(result);
+                    })
+                    .addMetricExporterCustomizer((exporter, config) -> {
+                        MetricExporter result = truststore == null ? exporter : truststore.customizeMetricExporter(exporter);
+                        return oauth == null ? result : oauth.customizeMetricExporter(result);
+                    })
+                    .addLogRecordExporterCustomizer((exporter, config) -> {
+                        LogRecordExporter result = truststore == null ? exporter : truststore.customizeLogRecordExporter(exporter);
+                        return oauth == null ? result : oauth.customizeLogRecordExporter(result);
+                    })
                     .build();
             OpenTelemetrySdk sdk = autoConfigured.getOpenTelemetrySdk();
             openTelemetry = sdk;
