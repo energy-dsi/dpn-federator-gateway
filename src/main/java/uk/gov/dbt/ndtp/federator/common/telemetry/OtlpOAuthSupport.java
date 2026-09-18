@@ -40,6 +40,13 @@ import uk.gov.dbt.ndtp.federator.common.utils.GRPCUtils;
  * Keycloak is unreachable, that export attempt fails outright rather than silently sending an
  * unauthenticated request, and is handled the same way any other collector-down scenario already
  * is (see {@link OpenTelemetryConfig#initialize()}'s outer catch).
+ *
+ * <p>{@link GRPCUtils#createRedisIdpTokenService()} is deliberately NOT called from
+ * {@link #resolve()} - it reads {@code common-configuration.properties} via {@code PropertyUtil},
+ * which is not yet initialised this early ({@code OpenTelemetryConfig.initialize()} is called as
+ * the very first thing in {@code FederatorClient}/{@code FederatorServer}'s {@code main()}, before
+ * {@code PropertyUtil.init(...)}). The {@link IdpTokenService} is instead built lazily, on the
+ * first actual export attempt, by which point startup has completed and properties are loaded.
  */
 final class OtlpOAuthSupport {
 
@@ -47,7 +54,7 @@ final class OtlpOAuthSupport {
 
     static final String OAUTH_ENABLED_ENV = "OTEL_EXPORTER_OTLP_OAUTH_ENABLED";
 
-    private final IdpTokenService idpTokenService;
+    private volatile IdpTokenService idpTokenService;
 
     private OtlpOAuthSupport(IdpTokenService idpTokenService) {
         this.idpTokenService = idpTokenService;
@@ -62,14 +69,26 @@ final class OtlpOAuthSupport {
         if (!Boolean.parseBoolean(System.getenv(OAUTH_ENABLED_ENV))) {
             return null;
         }
-        IdpTokenService idpTokenService = GRPCUtils.createRedisIdpTokenService();
         LOGGER.info("OTLP export will authenticate to the collector via OAuth client-credentials "
                 + "(dpn-service-client Keycloak client, same as Redis-gating/Kafka auth)");
-        return new OtlpOAuthSupport(idpTokenService);
+        return new OtlpOAuthSupport(null);
+    }
+
+    private IdpTokenService idpTokenService() {
+        IdpTokenService result = idpTokenService;
+        if (result == null) {
+            synchronized (this) {
+                result = idpTokenService;
+                if (result == null) {
+                    idpTokenService = result = GRPCUtils.createRedisIdpTokenService();
+                }
+            }
+        }
+        return result;
     }
 
     private Supplier<Map<String, String>> headersSupplier() {
-        return () -> Map.of("Authorization", "Bearer " + idpTokenService.fetchTokenWithResilience());
+        return () -> Map.of("Authorization", "Bearer " + idpTokenService().fetchTokenWithResilience());
     }
 
     SpanExporter customizeSpanExporter(SpanExporter exporter) {
