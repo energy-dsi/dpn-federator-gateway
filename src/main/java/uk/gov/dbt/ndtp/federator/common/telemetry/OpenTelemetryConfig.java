@@ -132,7 +132,7 @@ public final class OpenTelemetryConfig {
             exportingViaOtlp = true;
         } catch (Throwable t) {
             LOGGER.warn("OTel Collector is not available - continuing without OTLP telemetry "
-                    + "export. Console/application logging is unaffected.");
+                    + "export. Console/application logging is unaffected.", t);
             openTelemetry = OpenTelemetry.noop();
         }
 
