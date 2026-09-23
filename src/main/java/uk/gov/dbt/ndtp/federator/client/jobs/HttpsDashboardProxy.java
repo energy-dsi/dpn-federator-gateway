@@ -19,13 +19,10 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpRequest.BodyPublishers;
 import java.net.http.HttpResponse;
 import java.net.http.HttpResponse.BodyHandlers;
-import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 import javax.net.ssl.KeyManager;
 import javax.net.ssl.SSLContext;
 import lombok.extern.slf4j.Slf4j;
@@ -44,11 +41,6 @@ import uk.gov.dbt.ndtp.federator.common.utils.SSLUtils;
  * bind-address option). This proxy's TLS is only meaningful if that plaintext port is unreachable
  * from outside the host - enforce that at the network layer (firewall / do not expose the port /
  * Kubernetes NetworkPolicy). See {@link DefaultJobSchedulerProvider}.
- * <p>
- * This is the outermost hop a client reaches (the public HTTPS port), so it's also the one place
- * that matters for SSE keepalives: cloud load balancers (e.g. Azure's, 4-minute default) silently
- * drop TCP connections that go idle, and an SSE stream can easily sit quiet that long between
- * live-update events. See the periodic keepalive comment written in {@link ProxyHandler#handle}.
  */
 @Slf4j
 public final class HttpsDashboardProxy {
@@ -58,12 +50,6 @@ public final class HttpsDashboardProxy {
                     "host", "expect");
     private static final Set<String> HOP_BY_HOP_RESPONSE_HEADERS =
             Set.of("connection", "keep-alive", "transfer-encoding", "content-length");
-    // A ":"-prefixed line is an SSE comment - valid per spec, silently ignored by EventSource
-    // clients, but still real bytes on the wire. Written periodically on /sse/ connections so the
-    // TCP connection never looks idle to a load balancer, well under any realistic idle-timeout
-    // floor (Azure's default is 4 minutes; even a tightened custom value is rarely under 1).
-    private static final byte[] SSE_KEEPALIVE_COMMENT = ": keepalive\n\n".getBytes(StandardCharsets.UTF_8);
-    private static final long SSE_KEEPALIVE_INTERVAL_SECONDS = 25;
 
     private final HttpsServer server;
     private final HttpClient client =
@@ -120,7 +106,6 @@ public final class HttpsDashboardProxy {
         @Override
         public void handle(HttpExchange exchange) {
             try {
-                boolean isSse = exchange.getRequestURI().getPath().startsWith("/sse/");
                 URI upstreamUri = URI.create(upstreamBaseUrl + exchange.getRequestURI());
                 HttpRequest.Builder builder = HttpRequest.newBuilder(upstreamUri);
                 // JobRunr's SSE endpoints stream events for as long as the browser tab stays open -
@@ -129,7 +114,7 @@ public final class HttpsDashboardProxy {
                 // forcibly cut every SSE connection at exactly 30s regardless of network health,
                 // tearing down the response being streamed back to the browser too ("Broken pipe").
                 // Every other request still gets the 30s safety net.
-                if (!isSse) {
+                if (!exchange.getRequestURI().getPath().startsWith("/sse/")) {
                     builder.timeout(Duration.ofSeconds(30));
                 }
 
@@ -172,38 +157,15 @@ public final class HttpsDashboardProxy {
                 exchange.sendResponseHeaders(status, noBody ? -1 : 0);
                 try (InputStream in = response.body()) {
                     if (!noBody) {
-                        OutputStream out = exchange.getResponseBody();
-                        ScheduledExecutorService keepAlive = null;
-                        try {
-                            if (isSse) {
-                                // Ticks independently of whether upstream is sending anything, so a
-                                // quiet SSE stream still produces wire traffic often enough that no
-                                // intermediary (load balancer, proxy) ever sees it go idle.
-                                keepAlive = Executors.newSingleThreadScheduledExecutor();
-                                keepAlive.scheduleAtFixedRate(
-                                        () -> writeSseKeepAlive(out),
-                                        SSE_KEEPALIVE_INTERVAL_SECONDS,
-                                        SSE_KEEPALIVE_INTERVAL_SECONDS,
-                                        TimeUnit.SECONDS);
-                            }
+                        try (OutputStream out = exchange.getResponseBody()) {
                             byte[] buf = new byte[8192];
                             int n;
                             while ((n = in.read(buf)) != -1) {
-                                // Synchronized against the keepalive ticker, which writes to this
-                                // same stream from a different thread - without this, an unluckily
-                                // timed keepalive tick could interleave with a real chunk mid-write.
-                                synchronized (out) {
-                                    out.write(buf, 0, n);
-                                    // Flush each read so tiny SSE events reach the browser immediately
-                                    // instead of sitting in the chunked-output buffer until it fills.
-                                    out.flush();
-                                }
+                                out.write(buf, 0, n);
+                                // Flush each read so tiny SSE events reach the browser immediately
+                                // instead of sitting in the chunked-output buffer until it fills.
+                                out.flush();
                             }
-                        } finally {
-                            if (keepAlive != null) {
-                                keepAlive.shutdownNow();
-                            }
-                            out.close();
                         }
                     }
                 }
@@ -219,23 +181,6 @@ public final class HttpsDashboardProxy {
                 }
             } finally {
                 exchange.close();
-            }
-        }
-
-        /**
-         * Writes one SSE keepalive comment to {@code out}. Runs on the scheduler's own thread,
-         * concurrently with the main copy loop above, so it must take the same lock that loop
-         * does before touching the stream.
-         */
-        private void writeSseKeepAlive(OutputStream out) {
-            try {
-                synchronized (out) {
-                    out.write(SSE_KEEPALIVE_COMMENT);
-                    out.flush();
-                }
-            } catch (IOException e) {
-                // Connection is most likely already closed/broken; the main copy loop's own
-                // read/write will fail the same way and handle cleanup - nothing more to do here.
             }
         }
     }
