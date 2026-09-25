@@ -36,13 +36,13 @@ public interface FederatorStreamService<R, T> {
      * <ul>
      *   <li>Iterate all producers in the configuration (null-safe)</li>
      *   <li>From each producer, look at all products whose topic matches the supplied topic</li>
-     *   <li>From matching products, find consumers whose idpClientId matches the supplied consumerId (case-insensitive)</li>
+     *   <li>From matching products, find consumers whose idpClientId matches the supplied consumerId (case-sensitive)</li>
      *   <li>Collect and return all non-null attributes for those matching consumers</li>
      * </ul>
      *
      * <p>If the configuration or any nested collection is null, this method safely returns an empty list.
      *
-     * @param consumerId the consumer's IDP client id to match (case-insensitive)
+     * @param consumerId the consumer's IDP client id to match (case-sensitive)
      * @param topic the Kafka topic to match against products
      * @param producerConfigDTO the producer configuration to search
      * @return a list of matching AttributesDTO; empty if none found or inputs are missing
@@ -71,7 +71,7 @@ public interface FederatorStreamService<R, T> {
                 })
                 .filter(consumer -> consumer != null
                         && consumer.getIdpClientId() != null
-                        && consumer.getIdpClientId().equalsIgnoreCase(consumerId))
+                        && consumer.getIdpClientId().equals(consumerId))
                 .flatMap(consumer -> {
                     List<AttributesDTO> attrs = consumer.getAttributes();
                     return attrs == null ? Stream.empty() : attrs.stream();

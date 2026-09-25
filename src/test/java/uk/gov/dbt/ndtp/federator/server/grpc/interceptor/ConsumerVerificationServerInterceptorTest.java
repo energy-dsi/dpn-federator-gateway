@@ -129,11 +129,19 @@ class ConsumerVerificationServerInterceptorTest {
     }
 
     @Test
-    void isConsumerAuthorized_true_whenAnyConsumerMatches_caseInsensitive() {
+    void isConsumerAuthorized_false_whenConsumerMatchesOnlyByCase() {
         ProducerDTO first = producerWithProducts(
                 productWithConsumers("topic-1", consumer("ALICE")), productWithConsumers("topic-2", consumer("bob")));
         ProducerConfigDTO cfg = cfgWithFirstProducer(first);
-        assertTrue(invokeIsConsumerAuthorized(cfg, "alice"));
+        assertFalse(invokeIsConsumerAuthorized(cfg, "alice"));
+    }
+
+    @Test
+    void isConsumerAuthorized_true_whenConsumerMatchesExactCase() {
+        ProducerDTO first = producerWithProducts(
+                productWithConsumers("topic-1", consumer("ALICE")), productWithConsumers("topic-2", consumer("bob")));
+        ProducerConfigDTO cfg = cfgWithFirstProducer(first);
+        assertTrue(invokeIsConsumerAuthorized(cfg, "ALICE"));
     }
 
     @Test

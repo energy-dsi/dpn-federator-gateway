@@ -86,12 +86,12 @@ public class KafkaStreamService extends CloseableFederatorStreamService<TopicReq
      * <ul>
      *   <li>Only the first producer in the configuration is considered (as per current business rule).</li>
      *   <li>Within that producer, products are filtered by an exact topic match.</li>
-     *   <li>For matching products, consumers are checked for an idpClientId that matches the supplied consumerId (case-insensitive).</li>
+     *   <li>For matching products, consumers are checked for an idpClientId that matches the supplied consumerId (case-sensitive).</li>
      * </ul>
      *
      * <p>Nulls in the configuration or nested collections are handled defensively; if anything essential is missing, this method returns {@code false}.
      *
-     * @param consumerId the consumer's IDP client id to check (case-insensitive)
+     * @param consumerId the consumer's IDP client id to check (case-sensitive)
      * @param topic the Kafka topic name to verify access for
      * @param producerConfigDTO the producer configuration source to inspect
      * @return {@code true} if a matching consumer is found for the topic under the first producer; otherwise {@code false}
@@ -118,6 +118,6 @@ public class KafkaStreamService extends CloseableFederatorStreamService<TopicReq
                 })
                 .anyMatch(c -> c != null
                         && c.getIdpClientId() != null
-                        && c.getIdpClientId().equalsIgnoreCase(consumerId));
+                        && c.getIdpClientId().equals(consumerId));
     }
 }
