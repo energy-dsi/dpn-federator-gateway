@@ -283,6 +283,29 @@ class JobRunnerAuthGatewayTest {
     }
 
     @Test
+    void faviconRequest_isRejectedWith404_withoutTriggeringLoginRedirect() throws Exception {
+        // Regression: browsers request /favicon.ico automatically alongside any page load. If it
+        // went through the normal redirect-to-login flow, it would overwrite the single stateless
+        // jobrunr_oidc_state cookie with an unrelated state value, breaking whichever login
+        // attempt completes second - surfacing as a "missing or mismatched state" error on a
+        // real, otherwise-correct login.
+        int publicPort = freePort();
+        int internalPort = freePort();
+        upstream = startUpstream(internalPort);
+        gateway = startGatewayWithBrowserLogin(publicPort, internalPort);
+
+        HttpClient client = HttpClient.newHttpClient();
+        HttpRequest request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + publicPort + "/favicon.ico"))
+                .GET()
+                .build();
+        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(404, response.statusCode());
+        assertTrue(response.headers().firstValue("Set-Cookie").isEmpty());
+        assertTrue(response.headers().firstValue("Location").isEmpty());
+    }
+
+    @Test
     void apiRequestWithBearerHeader_getsPlain401_evenWhenBrowserLoginEnabled() throws Exception {
         int publicPort = freePort();
         int internalPort = freePort();
