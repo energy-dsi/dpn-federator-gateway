@@ -1,0 +1,238 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.federatorClient.name }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  replicas: {{ .Values.federatorClient.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ .Values.federatorClient.name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.federatorClient.name }}
+    spec:
+      containers:
+        - name: {{ .Values.federatorClient.name }}
+          image: "{{ .Values.federatorClient.image.repository }}:{{ .Values.federatorClient.image.tag }}"
+          imagePullPolicy: {{ .Values.federatorClient.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              {{- if eq .Values.kafka.authMode "sasl_ssl" }}
+              set -e
+              # Build the merged truststore (public CAs + our internal CAs) under our own
+              # password. "changeit" is the JDK's documented default password for its bundled
+              # cacerts file - a public constant, not a credential - required here only to
+              # unlock the stock file before re-keying it to KAFKA_SSL_TRUSTSTORE_PASSWORD.
+              cp "$JAVA_HOME/lib/security/cacerts" /tmp/merged-truststore.jks
+              keytool -storepasswd -noprompt \
+                -keystore /tmp/merged-truststore.jks -storepass changeit \
+                -new "$KAFKA_SSL_TRUSTSTORE_PASSWORD"
+              keytool -importkeystore -noprompt \
+                -srckeystore /etc/secrets/truststore.jks -srcstoretype PKCS12 -srcstorepass "$KAFKA_SSL_TRUSTSTORE_PASSWORD" \
+                -destkeystore /tmp/merged-truststore.jks -deststoretype JKS -deststorepass "$KAFKA_SSL_TRUSTSTORE_PASSWORD"
+              {{- end }}
+              # Note: /tmp/merged-truststore.jks above is actually PKCS12 on disk (the JDK's own
+              # cacerts we start from is PKCS12 since JDK 9, and keytool -importkeystore does not
+              # convert an already-existing destination's format) - trustStoreType below must say
+              # PKCS12, not JKS, or the JVM's default SSLContext fails to load it at all, breaking
+              # anything relying on it for TLS trust. Kafka's own client is unaffected since it
+              # points ssl.truststore.* directly at /etc/secrets/truststore.jks instead of
+              # relying on this JVM-wide default - jobs.dashboard.auth.trustStore* below gives
+              # BearerTokenVerifier's Keycloak JWKS fetch (and the OIDC token-endpoint call it
+              # shares that trust with) that same isolation, reusing the same file/password rather
+              # than sharing the javax.net.ssl.* properties above (see
+              # BearerTokenVerifier.trustStoreSslContext() for why).
+              # Job Runner UI browser login (OIDC) client secret below reuses the same
+              # dpn-service-client secret Kafka's OAuth already pulls from Key Vault (see
+              # federator-client-secretproviderclass.yaml). client.properties only leaves the key
+              # present so this override applies (PropertyUtil only overrides keys already in the
+              # file) - a comment can't be interspersed in the \-continued command itself, or the
+              # shell would treat it as ending the command early.
+              exec java \
+                -Djava.net.preferIPv4Stack=true \
+                -Djava.net.preferIPv6Addresses=false \
+                -Dnetworkaddress.cache.negative.ttl=0 \
+                -Dvault.truststore.password="$VAULT_TRUSTSTORE_PASSWORD" \
+                -Dazure.storage.connection.string="$AZURE_STORAGE_CONNECTION_STRING" \
+                -Dredis.idp.client.secret="$KAFKA_OAUTH_CLIENT_SECRET" \
+                -Djobs.dashboard.https.keystorePassword="$KAFKA_SSL_KEYSTORE_PASSWORD" \
+                {{- if .Values.federatorClient.auth.enabled }}
+                -Djobs.dashboard.auth.oidc.client.secret="$KAFKA_OAUTH_CLIENT_SECRET" \
+                {{- end }}
+                {{- if eq .Values.kafka.authMode "sasl_ssl" }}
+                -Dorg.apache.kafka.sasl.oauthbearer.allowed.urls="{{ .Values.kafkaTarget.oauth.tokenEndpointUrl }}" \
+                -Djavax.net.ssl.trustStore=/tmp/merged-truststore.jks \
+                -Djavax.net.ssl.trustStoreType=PKCS12 \
+                -Djavax.net.ssl.trustStorePassword="$KAFKA_SSL_TRUSTSTORE_PASSWORD" \
+                -Djobs.dashboard.auth.trustStore=/etc/secrets/truststore.jks \
+                -Djobs.dashboard.auth.trustStoreType=PKCS12 \
+                -Djobs.dashboard.auth.trustStorePassword="$KAFKA_SSL_TRUSTSTORE_PASSWORD" \
+                -Dredis.truststore.password="$KAFKA_SSL_TRUSTSTORE_PASSWORD" \
+                -Dredis.idp.truststore.password="$KAFKA_SSL_TRUSTSTORE_PASSWORD" \
+                {{- end }}
+                $PROPERTIES \
+                -cp /app/app.jar:/library/* \
+                uk.gov.dbt.ndtp.federator.FederatorClient \
+                $ARGS
+          env:
+            - name: FEDERATOR_CLIENT_PROPERTIES
+              value: /config/client.properties
+            # dpn-service-client's client secret - owned by dpn-authentication-service's
+            # Keycloak chart (asserted onto that client on every Keycloak deploy), referenced
+            # directly here instead of independently pulling KAFKA-OAUTH-CLIENT-SECRET.
+            - name: KAFKA_OAUTH_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: dpn-keycloak-secrets
+                  key: KC_SERVICE_CLIENT_SECRET
+            # Dashboard HTTPS is always enabled (see federator-client-config.yaml), independent of
+            # Kafka's auth mode, so this keystore password is unconditional.
+            - name: KAFKA_SSL_KEYSTORE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: tls-auth-secret
+                  key: KEYSTORE_PASSWORD
+            {{- if eq .Values.kafka.authMode "sasl_ssl" }}
+            - name: KAFKA_SSL_TRUSTSTORE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: tls-auth-secret
+                  key: TRUSTSTORE_PASSWORD
+            {{- end }}
+            - name: AZURE_CLIENT_ID
+              value: {{ .Values.keyvault.clientID }}
+            - name: VAULT_TRUSTSTORE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: tls-auth-secret
+                  key: TRUSTSTORE_PASSWORD
+            # VAULT_TOKEN (a Vault root token) is only rendered for authMethod=token
+            # environments — AppRole environments never get this env var injected into
+            # the pod at all, not just an empty/optional value.
+            {{- if eq .Values.vaultConfig.authMethod "token" }}
+            - name: VAULT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: certificate-manager-secrets
+                  key: VAULT_TOKEN
+            {{- end }}
+            - name: VAULT_ROLE_ID
+              value: {{ .Values.vaultConfig.appRole.roleId | quote }}
+            - name: VAULT_SECRET_ID
+            {{- if .Values.vaultConfig.appRole.useSecretIdRef }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.vaultConfig.appRole.secretIdSecretName }}
+                  key: {{ .Values.vaultConfig.appRole.secretIdSecretKey }}
+            {{- else }}
+              value: {{ .Values.vaultConfig.appRole.secretId | quote }}
+            {{- end }}
+            - name: VAULT_KEYSTORE_PASSWORD_PATH
+              value: {{ .Values.vaultConfig.keystorePasswordPath }}
+            - name: VAULT_TRUSTSTORE_PASSWORD_PATH
+              value: {{ .Values.vaultConfig.truststorePasswordPath }}
+            - name: AZURE_STORAGE_CONNECTION_STRING
+              valueFrom:
+                secretKeyRef:
+                  name: federator-client-secrets
+                  key: STORAGE_CONNECTION_STRING
+
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "{{ ternary "https" "http" .Values.otel.tls.enabled }}://{{ .Values.otel.collector.host }}:{{ .Values.otel.collector.port }}"
+
+            - name: OTEL_EXPORTER_OTLP_PROTOCOL
+              value: {{ .Values.otel.env.OTEL_EXPORTER_OTLP_PROTOCOL | quote }}
+
+            - name: OTEL_EXPORTER_OTLP_INSECURE
+              value: {{ .Values.otel.tls.enabled | not | quote }}
+
+            {{- if .Values.otel.tls.enabled }}
+            - name: OTEL_EXPORTER_OTLP_TRUSTSTORE_PATH
+              value: {{ .Values.vaultConfig.truststorePath | quote }}
+            - name: OTEL_EXPORTER_OTLP_TRUSTSTORE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: tls-auth-secret
+                  key: TRUSTSTORE_PASSWORD
+            {{- end }}
+
+            - name: OTEL_SERVICE_NAME
+              value: {{ .Values.otel.env.OTEL_SERVICE_NAME_CLIENT | quote }}
+
+            - name: OTEL_TRACES_SAMPLER
+              value: {{ .Values.otel.env.OTEL_TRACES_SAMPLER | quote }}
+
+            - name: OTEL_TRACES_SAMPLER_ARG
+              value: {{ .Values.otel.env.OTEL_TRACES_SAMPLER_ARG | quote }}
+          envFrom:
+            - secretRef:
+                name: federator-client-secrets
+    
+          
+          ports:
+            - containerPort: {{ .Values.federatorClient.service.grpcPort }}
+            - containerPort: {{ .Values.federatorClient.service.jobRunnerPort }}
+            {{- if .Values.federatorClient.auth.enabled }}
+            - containerPort: {{ .Values.federatorClient.service.jobRunnerAuthPort }}
+            {{- end }}
+          {{- with .Values.federatorClient.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: config
+              mountPath: /config
+            # dpn-tls: keystore.jks used both as the Kafka TLS client identity/truststore (same
+            # secret the brokers mount) and, unconditionally, as the dashboard HTTPS listener's
+            # own TLS identity (see federator-client-config.yaml) — so this mount is never gated
+            # on kafka.authMode.
+            - name: dpn-tls
+              mountPath: /etc/secrets
+              readOnly: true
+            {{- if .Values.vaultConfig.mountCertFileShare }}
+            - name: tls
+              mountPath: /tls
+              readOnly: true
+            {{- end }}
+            {{- if .Values.keyvault.enabled }}
+            - name: client-secrets-store
+              mountPath: /mnt/secrets
+              readOnly: true
+            {{- end }}
+            - name: vault-truststore
+              mountPath: /vault/truststore
+              readOnly: true
+      volumes:
+        - name: config
+          projected:
+            sources:
+              - configMap:
+                  name: federator-client-config
+              - configMap:
+                  name: federator-client-connection-config
+              - configMap:
+                  name: federator-common-config-client
+        - name: dpn-tls
+          secret:
+            secretName: dpn-tls
+        {{- if .Values.vaultConfig.mountCertFileShare }}
+        - name: tls
+          persistentVolumeClaim:
+            claimName: {{ .Values.fileShare.pvcName }}
+        {{- end }}
+        {{- if .Values.keyvault.enabled }}
+        - name: client-secrets-store
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: federator-client-kv-secrets
+        {{- end }}
+        - name: vault-truststore
+          secret:
+            secretName: cert-manager-truststore

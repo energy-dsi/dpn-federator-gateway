@@ -1,0 +1,115 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.redis.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ .Values.redis.name }}
+spec:
+  replicas: {{ .Values.redis.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ .Values.redis.name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.redis.name }}
+    spec:
+      # dpn-tls's keystore.jks (alias "dpn-server") carries a PrivateKeyEntry whose SAN is
+      # *.ns-dpn-01.svc.cluster.local - the same universal cert Kafka uses - which already
+      # covers dpn-redis. redis-server needs PEM cert/key, not JKS, so this initContainer
+      # extracts them once into a shared emptyDir before the redis container starts.
+      # Uses the federator-server image (not dpn-redis) because it has openssl - dpn-redis
+      # does not (confirmed by exit code 127 / "command not found" when it was tried here).
+      #
+      # --tls-auth-clients no (below, in redis.args): Redis's TLS listener only needs a server
+      # cert here, mirroring Kafka's own SASL_SSL listener (KAFKA_SSL_CLIENT_AUTH=none) - client
+      # identity/authorization for Redis is enforced at the application layer via Keycloak
+      # (KeycloakSessionGuard, see RedisUtil.java), not via a client TLS certificate. dpn-tls's
+      # keystore.jks only carries serverAuth EKU anyway, so it could never be presented as a
+      # valid client cert for mutual TLS.
+      initContainers:
+        - name: redis-tls-cert-init
+          image: "{{ .Values.federatorServer.image.repository }}:{{ .Values.federatorServer.image.tag }}"
+          imagePullPolicy: {{ .Values.redis.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              openssl pkcs12 -in /etc/dpn-tls/keystore.jks -passin pass:"$KEYSTORE_PASSWORD" \
+                -nokeys -clcerts -out /tls/redis.crt
+              openssl pkcs12 -in /etc/dpn-tls/keystore.jks -passin pass:"$KEYSTORE_PASSWORD" \
+                -nocerts -nodes -out /tls/redis.key
+              cp /etc/dpn-tls/ca.crt /tls/ca.crt
+              # The redis container runs as a different (non-root) user than this initContainer,
+              # so the extracted files must be world-readable for it to load them.
+              chmod 644 /tls/redis.crt /tls/redis.key /tls/ca.crt
+          env:
+            - name: KEYSTORE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: tls-auth-secret
+                  key: KEYSTORE_PASSWORD
+          volumeMounts:
+            - name: dpn-tls
+              mountPath: /etc/dpn-tls
+              readOnly: true
+            - name: redis-tls-pem
+              mountPath: /tls
+      containers:
+        - name: {{ .Values.redis.name }}
+          image: "{{ .Values.redis.image.repository }}:{{ .Values.redis.image.tag }}"
+          imagePullPolicy: {{ .Values.redis.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+          ports:
+            - containerPort: {{ .Values.redis.service.port }}
+          args:
+            {{- toYaml .Values.redis.args | nindent 12 }}
+          volumeMounts:
+            - name: redis-tls-pem
+              mountPath: /tls
+              readOnly: true
+          # TCP-only checks: the bundled redis-cli in this image may not be built with TLS
+          # support ("Server closed the connection" on redis-cli --tls ... ping even though the
+          # server itself is healthy), so probing the TLS port's TCP handshake avoids depending
+          # on redis-cli's TLS capability entirely.
+          livenessProbe:
+            tcpSocket:
+              port: {{ .Values.redis.service.port }}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            tcpSocket:
+              port: {{ .Values.redis.service.port }}
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+      volumes:
+        - name: dpn-tls
+          secret:
+            secretName: dpn-tls
+        - name: redis-tls-pem
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.redis.name }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    app: {{ .Values.redis.name }}
+  ports:
+    - name: redis
+      port: {{ .Values.redis.service.port }}
+      targetPort: {{ .Values.redis.service.port }}
+

@@ -1,0 +1,58 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: federator-common-config-client
+  namespace: {{ .Release.Namespace }}
+data:
+  common-configuration.properties: |
+    idp.mtls.enabled=true
+
+    idp.client.id={{ .Values.federatorClient.idp.clientId }}
+
+    idp.jwks.url={{ .Values.federatorClient.idp.jwksUrl }}
+    idp.token.url={{ .Values.federatorClient.idp.tokenUrl }}
+    idp.token.backoff={{ .Values.federatorClient.idp.tokenBackoff }}
+
+    idp.truststore.path={{ .Values.federatorClient.idp.truststorePath }}
+    idp.truststore.password=
+
+    idp.keystore.path={{ .Values.federatorClient.idp.keystorePath }}
+    idp.keystore.password=
+
+    vault.uri={{ .Values.vaultConfig.uri }}
+    vault.truststore.path={{ .Values.vaultConfig.truststorePath }}
+    vault.truststore.password={{ .Values.vaultConfig.truststorePassword }}
+    vault.tls.enabled={{ .Values.vaultConfig.tlsEnabled }}
+    vault.tls.secret-base-path={{ .Values.vaultConfig.tlsBasePath }}
+    vault.tls.keystore-alias={{ .Values.vaultConfig.tlsKeystoreAlias }}
+
+    vault.auth.method={{ .Values.vaultConfig.authMethod }}
+    vault.approle.mount-path={{ .Values.vaultConfig.appRole.mountPath }}
+    vault.approle.renewal-interval-seconds={{ .Values.vaultConfig.appRole.renewalintervalSecs }}
+
+    idp.auth.mode={{ .Values.federatorClient.idp.authMode }}
+    idp.jwt.algorithm={{ .Values.federatorClient.idp.jwtAlgorithm }}
+    idp.jwt.key.alias={{ .Values.federatorClient.idp.jwtKeyAlias }}
+
+    # Master switch - controls ONLY whether Redis access requires a valid Keycloak session.
+    # Redis TLS (below) is unaffected either way and must remain true in every real
+    # environment. Should never be false outside local development testing.
+    keycloak.auth.enabled={{ .Values.federatorClient.keycloak.authEnabled | default true }}
+
+    redis.tls.enabled={{ .Values.federatorClient.redis.tlsEnabled | default true }}
+    redis.truststore.path={{ .Values.federatorClient.redis.truststorePath | default "/etc/secrets/truststore.jks" }}
+    redis.truststore.password=
+
+    # Dedicated Keycloak client that gates Redis access (KeycloakSessionGuard) - separate from
+    # the idp.* client above. Reuses the same dpn-service-client/realm Kafka's OAuth already
+    # uses; the secret is supplied at runtime via -Dredis.idp.client.secret.
+    redis.idp.mtls.enabled=false
+    redis.idp.token.url={{ .Values.kafkaTarget.oauth.tokenEndpointUrl }}
+    redis.idp.client.id={{ .Values.kafkaTarget.oauth.clientId }}
+    redis.idp.client.secret=
+    # Without this, HttpClientFactoryUtils falls back to idp.truststore.path (/tls/truststore.p12),
+    # which is never mounted here (vaultConfig.mountCertFileShare=false) - every Redis-gating
+    # token fetch then fails with FileNotFoundException, permanently blocking Redis-gated jobs.
+    # Same truststore already mounted and used for redis.truststore.path above.
+    redis.idp.truststore.path={{ .Values.federatorClient.redis.truststorePath | default "/etc/secrets/truststore.jks" }}
+    redis.idp.truststore.password=

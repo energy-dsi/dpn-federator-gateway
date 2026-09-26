@@ -1,0 +1,306 @@
+{{- if eq .Values.kafka.authMode "sasl_ssl" }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kafka-jaas-config
+  namespace: {{ .Release.Namespace }}
+data:
+  kafka_server_jaas.conf: |
+    KafkaServer {
+      org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule required;
+    };
+    internal.KafkaServer {
+      org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule required;
+    };
+    internal_fqdn.KafkaServer {
+      org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule required;
+    };
+    external.KafkaServer {
+      org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule required;
+    };
+---
+{{- end }}
+{{- if .Values.kafkaSrc.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Values.kafkaSrc.name }}-pvc
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ .Values.kafkaSrc.name }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: {{ .Values.kafkaSrc.persistence.storageClass }}
+  resources:
+    requests:
+      storage: {{ .Values.kafkaSrc.persistence.size }}
+---
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.kafkaSrc.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ .Values.kafkaSrc.name }}
+spec:
+  replicas: {{ .Values.kafkaSrc.replicaCount }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: {{ .Values.kafkaSrc.name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.kafkaSrc.name }}
+    spec:
+      securityContext:
+        runAsUser: {{ .Values.kafkaSrc.securityContext.runAsUser }}
+        runAsGroup: {{ .Values.kafkaSrc.securityContext.runAsGroup }}
+        fsGroup: {{ .Values.kafkaSrc.securityContext.fsGroup }}
+      containers:
+        - name: kafka
+          image: "{{ .Values.kafkaSrc.image.repository }}:{{ .Values.kafkaSrc.image.tag }}"
+          imagePullPolicy: {{ .Values.kafkaSrc.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+          ports:
+            - containerPort: {{ .Values.kafkaSrc.service.port }}
+            - containerPort: 9093
+            - containerPort: 9094
+          env:
+            # ── Core broker config (all modes) ────────────────────────────────────
+            - name: CUB_KAFKA_MIN_BROKERS
+              value: "0"
+            - name: ZOOKEEPER_SASL_ENABLED
+              value: "false"
+            - name: KAFKA_BROKER_ID
+              value: {{ .Values.kafkaSrc.env.KAFKA_BROKER_ID | quote }}
+            - name: KAFKA_ZOOKEEPER_CONNECT
+              value: {{ .Values.kafkaSrc.env.KAFKA_ZOOKEEPER_CONNECT | quote }}
+            - name: KAFKA_LISTENERS
+              value: "INTERNAL://0.0.0.0:9092,INTERNAL_FQDN://0.0.0.0:9093,EXTERNAL://0.0.0.0:9094"
+            - name: KAFKA_ADVERTISED_LISTENERS
+              value: "INTERNAL://{{ .Values.kafkaSrc.name }}.{{ .Release.Namespace }}.svc.cluster.local:9092,INTERNAL_FQDN://{{ .Values.kafkaSrc.name }}.{{ .Release.Namespace }}.svc.cluster.local:9093,EXTERNAL://{{ .Values.kafkaSrc.name }}.{{ .Release.Namespace }}.svc.cluster.local:9094"
+            - name: KAFKA_INTER_BROKER_LISTENER_NAME
+              value: {{ .Values.kafkaSrc.env.KAFKA_INTER_BROKER_LISTENER_NAME | quote }}
+            - name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR
+              value: {{ .Values.kafkaSrc.env.KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR | quote }}
+            - name: KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR
+              value: {{ .Values.kafkaSrc.env.KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR | quote }}
+            - name: KAFKA_TRANSACTION_STATE_LOG_MIN_ISR
+              value: {{ .Values.kafkaSrc.env.KAFKA_TRANSACTION_STATE_LOG_MIN_ISR | quote }}
+            - name: KAFKA_MESSAGE_MAX_BYTES
+              value: {{ .Values.kafkaSrc.env.KAFKA_MESSAGE_MAX_BYTES | quote }}
+            - name: KAFKA_REPLICA_FETCH_MAX_BYTES
+              value: {{ .Values.kafkaSrc.env.KAFKA_REPLICA_FETCH_MAX_BYTES | quote }}
+            - name: KAFKA_LOG_RETENTION_MS
+              value: {{ .Values.kafkaSrc.env.KAFKA_LOG_RETENTION_MS | quote }}
+            - name: KAFKA_LOG_RETENTION_BYTES
+              value: {{ .Values.kafkaSrc.env.KAFKA_LOG_RETENTION_BYTES | quote }}
+            - name: KAFKA_LOG_DIRS
+              value: {{ .Values.kafkaSrc.env.KAFKA_LOG_DIRS | quote }}
+
+            # ── Mode: plaintext ───────────────────────────────────────────────────
+            {{- if eq .Values.kafka.authMode "plaintext" }}
+            - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
+              value: "INTERNAL:PLAINTEXT,INTERNAL_FQDN:PLAINTEXT,EXTERNAL:PLAINTEXT"
+            {{- end }}
+
+            # ── Mode: ssl ─────────────────────────────────────────────────────────
+            {{- if eq .Values.kafka.authMode "ssl" }}
+            - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
+              value: "INTERNAL:SSL,INTERNAL_FQDN:SSL,EXTERNAL:SSL"
+            - name: KAFKA_SSL_KEYSTORE_LOCATION
+              value: {{ .Values.kafkaSrc.tls.keystoreLocation | quote }}
+            - name: KAFKA_SSL_KEYSTORE_TYPE
+              value: {{ .Values.kafkaSrc.tls.keystoreType | quote }}
+            - name: KAFKA_SSL_TRUSTSTORE_LOCATION
+              value: {{ .Values.kafkaSrc.tls.truststoreLocation | quote }}
+            - name: KAFKA_SSL_TRUSTSTORE_TYPE
+              value: {{ .Values.kafkaSrc.tls.truststoreType | quote }}
+            - name: KAFKA_SSL_KEY_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: tls-auth-secret
+                  key: KEYSTORE_PASSWORD
+            - name: KAFKA_SSL_CLIENT_AUTH
+              value: {{ .Values.kafkaSrc.tls.clientAuth | quote }}
+            - name: KAFKA_OPTS
+              value: "-Dzookeeper.sasl.client=false -Djavax.net.ssl.trustStore={{ .Values.kafkaSrc.tls.truststoreLocation }} -Djavax.net.ssl.trustStoreType={{ .Values.kafkaSrc.tls.truststoreType }}"
+            - name: KAFKA_SSL_KEYSTORE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: tls-auth-secret
+                  key: KEYSTORE_PASSWORD
+            - name: KAFKA_SSL_TRUSTSTORE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: tls-auth-secret
+                  key: TRUSTSTORE_PASSWORD
+            {{- end }}
+
+            # ── Mode: sasl_ssl ────────────────────────────────────────────────────
+            {{- if eq .Values.kafka.authMode "sasl_ssl" }}
+            - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
+              value: "INTERNAL:SASL_SSL,INTERNAL_FQDN:SASL_SSL,EXTERNAL:SASL_SSL"
+            - name: KAFKA_SASL_ENABLED_MECHANISMS
+              value: "OAUTHBEARER"
+            - name: KAFKA_SASL_MECHANISM_INTER_BROKER_PROTOCOL
+              value: "OAUTHBEARER"
+            # Server-side: validate incoming tokens on all listeners
+            - name: KAFKA_LISTENER_NAME_INTERNAL_OAUTHBEARER_SASL_SERVER_CALLBACK_HANDLER_CLASS
+              value: "org.apache.kafka.common.security.oauthbearer.OAuthBearerValidatorCallbackHandler"
+            - name: KAFKA_LISTENER_NAME_INTERNAL_FQDN_OAUTHBEARER_SASL_SERVER_CALLBACK_HANDLER_CLASS
+              value: "org.apache.kafka.common.security.oauthbearer.OAuthBearerValidatorCallbackHandler"
+            - name: KAFKA_LISTENER_NAME_EXTERNAL_OAUTHBEARER_SASL_SERVER_CALLBACK_HANDLER_CLASS
+              value: "org.apache.kafka.common.security.oauthbearer.OAuthBearerValidatorCallbackHandler"
+            # Client-side: fetch token from Keycloak for inter-broker (INTERNAL listener) connections
+            - name: KAFKA_LISTENER_NAME_INTERNAL_OAUTHBEARER_SASL_LOGIN_CALLBACK_HANDLER_CLASS
+              value: "org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginCallbackHandler"
+            - name: KAFKA_SASL_OAUTHBEARER_TOKEN_ENDPOINT_URL
+              value: {{ .Values.kafkaSrc.oauth.tokenEndpointUrl | quote }}
+            - name: KAFKA_SASL_OAUTHBEARER_JWKS_ENDPOINT_URL
+              value: {{ .Values.kafkaSrc.oauth.jwksUrl | quote }}
+            - name: KAFKA_SASL_OAUTHBEARER_EXPECTED_AUDIENCE
+              value: {{ .Values.kafkaSrc.oauth.expectedAudience | quote }}
+            - name: KAFKA_SASL_OAUTHBEARER_EXPECTED_ISSUER
+              value: {{ .Values.kafkaSrc.oauth.expectedIssuer | quote }}
+            - name: KAFKA_OAUTH_CLIENT_ID
+              value: {{ .Values.kafkaSrc.oauth.clientId | quote }}
+            - name: KEYCLOAK_ADMIN_USER
+              value: {{ .Values.kafkaSrc.oauth.adminUser | quote }}
+            - name: KAFKA_SSL_KEYSTORE_LOCATION
+              value: {{ .Values.kafkaSrc.tls.keystoreLocation | quote }}
+            - name: KAFKA_SSL_KEYSTORE_TYPE
+              value: {{ .Values.kafkaSrc.tls.keystoreType | quote }}
+            - name: KAFKA_SSL_TRUSTSTORE_LOCATION
+              value: {{ .Values.kafkaSrc.tls.truststoreLocation | quote }}
+            - name: KAFKA_SSL_TRUSTSTORE_TYPE
+              value: {{ .Values.kafkaSrc.tls.truststoreType | quote }}
+            - name: KAFKA_SSL_KEY_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: tls-auth-secret
+                  key: KEYSTORE_PASSWORD
+            - name: KAFKA_SSL_CLIENT_AUTH
+              value: {{ .Values.kafkaSrc.tls.clientAuth | quote }}
+            - name: KAFKA_SSL_TRUSTSTORE_PASSWORD_OPTS
+              valueFrom:
+                secretKeyRef:
+                  name: tls-auth-secret
+                  key: TRUSTSTORE_PASSWORD
+            # KAFKA_OPTS is inherited by the Confluent preflight process — keep only ZK SASL disable here
+            - name: KAFKA_OPTS
+              value: "-Dzookeeper.sasl.client=false"
+            # KAFKA_JVM_PERFORMANCE_OPTS is passed only to the broker JVM, not the preflight
+            - name: KAFKA_JVM_PERFORMANCE_OPTS
+              value: "-Djava.security.auth.login.config=/etc/kafka/jaas/kafka_server_jaas.conf -Djavax.net.ssl.trustStore={{ .Values.kafkaSrc.tls.truststoreLocation }} -Djavax.net.ssl.trustStoreType={{ .Values.kafkaSrc.tls.truststoreType }} -Djavax.net.ssl.trustStorePassword=$(KAFKA_SSL_TRUSTSTORE_PASSWORD_OPTS) -server -XX:+UseG1GC -XX:MaxGCPauseMillis=20 -XX:InitiatingHeapOccupancyPercent=35 -XX:+ExplicitGCInvokesConcurrent -XX:MaxInlineLevel=15 -Djava.awt.headless=true"
+            - name: KEYCLOAK_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: dpn-keycloak-secrets
+                  key: KEYCLOAK_ADMIN_PASSWORD
+            # Used by OAuthBearerLoginCallbackHandler for inter-broker token fetch. Same
+            # dpn-service-client secret Keycloak owns/asserts - referenced directly rather
+            # than independently pulling KAFKA-OAUTH-CLIENT-SECRET.
+            - name: KAFKA_OAUTH_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: dpn-keycloak-secrets
+                  key: KC_SERVICE_CLIENT_SECRET
+            # Listener-scoped JAAS config for INTERNAL listener client-side login (inter-broker)
+            # Uses $(VAR) K8s substitution — KAFKA_OAUTH_CLIENT_SECRET must be declared before this
+            - name: KAFKA_LISTENER_NAME_INTERNAL_OAUTHBEARER_SASL_JAAS_CONFIG
+              value: 'org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule required clientId="{{ .Values.kafkaSrc.oauth.clientId }}" clientSecret="$(KAFKA_OAUTH_CLIENT_SECRET)";'
+            - name: KAFKA_SSL_KEYSTORE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: tls-auth-secret
+                  key: KEYSTORE_PASSWORD
+            - name: KAFKA_SSL_TRUSTSTORE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: tls-auth-secret
+                  key: TRUSTSTORE_PASSWORD
+            {{- end }}
+
+          volumeMounts:
+            - name: kafka-data
+              mountPath: /var/lib/kafka/data
+            {{- if ne .Values.kafka.authMode "plaintext" }}
+            - name: dpn-tls
+              mountPath: /etc/secrets
+              readOnly: true
+            {{- end }}
+            {{- if eq .Values.kafka.authMode "sasl_ssl" }}
+            - name: kafka-jaas-config
+              mountPath: /etc/kafka/jaas
+              readOnly: true
+            {{- end }}
+
+          readinessProbe:
+            tcpSocket:
+              port: {{ .Values.kafkaSrc.service.port }}
+            initialDelaySeconds: {{ .Values.kafkaSrc.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.kafkaSrc.readinessProbe.periodSeconds }}
+          livenessProbe:
+            tcpSocket:
+              port: {{ .Values.kafkaSrc.service.port }}
+            initialDelaySeconds: {{ .Values.kafkaSrc.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.kafkaSrc.livenessProbe.periodSeconds }}
+      volumes:
+        - name: kafka-data
+{{- if .Values.kafkaSrc.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.kafkaSrc.name }}-pvc
+{{- else }}
+          emptyDir: {}
+{{- end }}
+        {{- if ne .Values.kafka.authMode "plaintext" }}
+        - name: dpn-tls
+          secret:
+            secretName: dpn-tls
+        {{- end }}
+        {{- if eq .Values.kafka.authMode "sasl_ssl" }}
+        - name: kafka-jaas-config
+          configMap:
+            name: kafka-jaas-config
+        {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.kafkaSrc.name }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    app: {{ .Values.kafkaSrc.name }}
+  ports:
+    - name: kafka-internal
+      port: {{ .Values.kafkaSrc.service.port }}
+      targetPort: {{ .Values.kafkaSrc.service.port }}
+    - name: kafka-internal-fqdn
+      port: 9093
+      targetPort: 9093
+    - name: kafka-external
+      port: 9094
+      targetPort: 9094
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.kafkaSrc.name }}-lb
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+spec:
+  type: LoadBalancer
+  selector:
+    app: {{ .Values.kafkaSrc.name }}
+  ports:
+    - name: kafka-external
+      port: 9094
+      targetPort: 9094

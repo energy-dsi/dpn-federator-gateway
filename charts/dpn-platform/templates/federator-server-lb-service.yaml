@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.federatorServer.name }}-external
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+spec:
+  type: LoadBalancer
+  loadBalancerIP: {{ .Values.federatorServer.service.loadBalancerIP }}
+  selector:
+    app: {{ .Values.federatorServer.name }}
+  ports:
+    - name: grpc-external
+      port: {{ .Values.federatorServer.service.lbPort }}
+      targetPort: {{ .Values.federatorServer.service.port }}
+      protocol: TCP

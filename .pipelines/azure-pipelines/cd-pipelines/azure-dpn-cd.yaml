@@ -1,0 +1,321 @@
+trigger: none
+
+pool:
+  name: '<<YOUR AGENT POOL>>'
+
+parameters:
+- name: ServiceConnection
+  displayName: 'ServiceConnection details'
+  type: string
+  default: 'sc-dpn-dev-001'
+  values:
+      - sc-dpn-dev-001
+      - sc-dpn-dev-002
+      - sc-dpn-test-001
+      - sc-dpn-test-002
+      - sc-dpn-pdev-ppd-001
+      - sc-dpn-ptest-ppd-001
+      - sc-dpn-puat-ppd-001
+
+- name: environment
+  displayName: Environment Name
+  type: string
+  default: 'dev'
+  values:
+      - dev
+      - devtest
+      - test
+      - pdev
+      - ptest
+      - puat
+
+- name: dpncluster
+  displayName: Target DPN Cluster
+  type: string
+  default: 'dpn01'
+  values:
+    - dpn01
+    - dpn02
+
+- name: imageTag
+  type: string
+  displayName: Federator Image tag
+
+variables:
+  - name: HELM_DIR
+    value: charts/dpn-platform
+  - name: RELEASE_NAME
+    value: dpn-platform
+
+  - name: VALUES_FILE
+    value: values-${{ parameters.environment }}-${{ parameters.dpncluster }}.yaml
+  - name: PARAMETERS_FILE
+    value: .pipelines/azure-pipelines/config/${{ parameters.environment }}-${{ parameters.dpncluster }}.json
+
+  # Approval group routing, shared across all DPN CD pipelines.
+  - ${{ if or(eq(parameters.environment, 'pdev'), eq(parameters.environment, 'ptest'), eq(parameters.environment, 'puat')) }}:
+    - name: APPROVAL_GROUP
+      value: dsi-ppd
+  - ${{ elseif or(eq(parameters.environment, 'devtest'), eq(parameters.environment, 'test')) }}:
+    - name: APPROVAL_GROUP
+      value: dsi-devtest
+  - ${{ else }}:
+    - name: APPROVAL_GROUP
+      value: dsi-dev
+
+stages:
+
+  # APPROVAL STAGE (SKIPPED FOR dev)
+- ${{ if ne(parameters.environment, 'dev') }}:
+  - stage: Approval
+    displayName: "Approval Gate"
+    jobs:
+    - deployment: ApprovalJob
+      environment: ${{ variables.APPROVAL_GROUP }}
+      strategy:
+        runOnce:
+          deploy:
+            steps:
+            - script: |
+                echo "Approval required before proceeding"
+
+- stage: Deploy_DPN
+  displayName: "Deploy DPN to AKS"
+  dependsOn:
+    - ${{ if ne(parameters.environment, 'dev') }}:
+      - Approval
+  jobs:
+  - job: Deploy
+    displayName: "Helm Deploy - DPN"
+
+    pool:
+      name: '<<YOUR AGENT POOL>>'
+
+    steps:
+    - checkout: self
+
+    # pdev, ptest and puat only run a single DPN (dpn01). dpn02 is not
+    # provisioned in those environments, so fail fast rather than deploying
+    # against a values/config file that doesn't exist.
+    - ${{ if or(eq(parameters.environment, 'pdev'), eq(parameters.environment, 'ptest'), eq(parameters.environment, 'puat')) }}:
+      - script: |
+          if [ "${{ parameters.dpncluster }}" == "dpn02" ]; then
+            echo "##[error]dpncluster=dpn02 is disabled for environment=${{ parameters.environment }}. This environment only has dpn01."
+            exit 1
+          fi
+        displayName: "Guard: dpn02 disabled for ${{ parameters.environment }}"
+
+    - script: |
+        echo "Loading config: $(PARAMETERS_FILE)"
+        for param in $(jq -r 'keys_unsorted | .[]' "$(Build.SourcesDirectory)/$(PARAMETERS_FILE)"); do
+          value=$(jq -r ".\"$param\"" "$(Build.SourcesDirectory)/$(PARAMETERS_FILE)")
+          echo "##vso[task.setvariable variable=$param]$value"
+        done
+      displayName: Load Environment Config
+
+    - task: AzureCLI@2
+      displayName: "AKS Auth + Helm Deploy"
+      inputs:
+        azureSubscription: '${{ parameters.ServiceConnection }}'
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          set -euo pipefail
+
+          echo "================================================="
+          echo " INSTALL TOOLS"
+          echo "================================================="
+          if ! command -v kubectl &>/dev/null || ! command -v kubelogin &>/dev/null; then
+            az aks install-cli --client-version 1.32.3 --kubelogin-version 0.2.18
+          else
+            echo "kubectl and kubelogin already installed, skipping"
+          fi
+          kubectl version --client >/dev/null
+          kubelogin --version >/dev/null
+          helm version >/dev/null
+          echo "Tools installed"
+
+          echo "=========================================="
+          echo " AZURE AUTH"
+          echo "=========================================="
+          az account set --subscription $(AZURE_SUBSCRIPTION_ID)
+          az account show >/dev/null
+          echo "Azure auth OK"
+
+          echo "=========================================="
+          echo " AKS CONTEXT"
+          echo "=========================================="
+          az aks get-credentials \
+            --resource-group $(RESOURCE_GROUP) \
+            --name $(AKS_CLUSTER) \
+            --overwrite-existing
+
+          kubelogin convert-kubeconfig -l azurecli
+          echo "AKS context ready"
+
+          echo "=========================================="
+          echo " CHECK tls-auth-secret EXISTS"
+          echo "=========================================="
+          # tls-auth-secret (KEYSTORE_PASSWORD/TRUSTSTORE_PASSWORD/
+          # DPN_CLIENT_P12_PASSWORD) is created directly into this namespace
+          # by dpn-tls-cd.yaml (dpn-federator-certificate-manager), not by
+          # this pipeline. Kafka (src/target/ui), federator client/server and
+          # redis all read it. Checking here, before the helm dry-run below,
+          # catches dpn-tls-cd simply not having been (re)run against this
+          # environment yet with one clear error, instead of a
+          # CreateContainerConfigError surfacing after the real deploy.
+          if kubectl get secret tls-auth-secret -n $(NAMESPACE) >/dev/null 2>&1; then
+            echo "  [OK]      tls-auth-secret exists in $(NAMESPACE)"
+          else
+            echo "##[error]  [MISSING] tls-auth-secret not found in $(NAMESPACE)"
+            echo "##[error] Run dpn-tls-cd (dpn-federator-certificate-manager) against"
+            echo "##[error] this environment first - it creates tls-auth-secret directly,"
+            echo "##[error] it is never synced by this pipeline."
+            exit 1
+          fi
+
+          echo "=========================================="
+          echo " FETCH SECRETS FROM KEY VAULT"
+          echo "=========================================="
+          # TRUSTSTORE-PASSWORD is the canonical, actively-rotated Key Vault
+          # object dpn-tls-cd (dpn-federator-certificate-manager) writes on
+          # every cert renewal. VAULT-TRUSTSTORE-PASSWORD is a bootstrap-only
+          # artifact (vault-tls-bootstrap-cd) that's never touched again once
+          # an environment is stood up, so it can drift stale after rotation.
+          VAULT_TRUSTSTORE_PASSWORD=$(az keyvault secret show \
+            --vault-name $(KEY_VAULT_NAME) \
+            --name TRUSTSTORE-PASSWORD \
+            --query value -o tsv)
+
+          echo "Secrets fetched from $(KEY_VAULT_NAME)"
+
+          echo "=========================================="
+          echo " ENSURE OAUTH2-PROXY COOKIE SECRET EXISTS"
+          echo "=========================================="
+          if ! kubectl get secret oauth2-proxy-secrets -n $(NAMESPACE) >/dev/null 2>&1; then
+            # oauth2-proxy decodes cookie_secret as URL-safe base64 (-/_), not openssl's default
+            # standard alphabet (+//) - tr converts it so the decoded value is exactly 32 bytes.
+            kubectl create secret generic oauth2-proxy-secrets \
+              -n $(NAMESPACE) \
+              --from-literal=OAUTH2_PROXY_COOKIE_SECRET="$(openssl rand -base64 32 | tr '+/' '-_')"
+          fi
+
+          echo "=========================================="
+          echo " HELM VALIDATION"
+          echo "=========================================="
+          helm lint "$(HELM_DIR)"
+
+          helm upgrade --install $(RELEASE_NAME) "$(HELM_DIR)" \
+            -n $(NAMESPACE) \
+            --set federatorServer.image.tag="${{ parameters.imageTag }}" \
+            --set federatorClient.image.tag="${{ parameters.imageTag }}" \
+            --set vaultConfig.truststorePassword="$VAULT_TRUSTSTORE_PASSWORD" \
+            -f "$(HELM_DIR)/$(VALUES_FILE)" \
+            --dry-run --debug >/dev/null
+
+          echo "Helm dry-run successful"
+
+          echo "=========================================="
+          echo " HELM DEPLOY"
+          echo "=========================================="
+          helm upgrade --install $(RELEASE_NAME) "$(HELM_DIR)" \
+            -n $(NAMESPACE) \
+            --set federatorServer.image.tag="${{ parameters.imageTag }}" \
+            --set federatorClient.image.tag="${{ parameters.imageTag }}" \
+            --set vaultConfig.truststorePassword="$VAULT_TRUSTSTORE_PASSWORD" \
+            -f "$(HELM_DIR)/$(VALUES_FILE)" \
+            --debug
+
+          echo "=========================================="
+          echo " POST-DEPLOY VERIFICATION"
+          echo "=========================================="
+
+          echo " Checking Core Deployments..."
+          kubectl rollout status deployment/dpn-redis -n $(NAMESPACE) --timeout=300s
+          kubectl rollout status deployment/dpn-zookeeper-src -n $(NAMESPACE) --timeout=300s
+          kubectl rollout status deployment/dpn-zookeeper-target -n $(NAMESPACE) --timeout=300s
+          kubectl rollout status deployment/dpn-kafka-src -n $(NAMESPACE) --timeout=300s
+          kubectl rollout status deployment/dpn-kafka-target -n $(NAMESPACE) --timeout=300s
+          kubectl rollout status deployment/dpn-kafka-ui -n $(NAMESPACE) --timeout=300s
+
+          echo " Checking Federator Deployments..."
+          case "${{ parameters.environment }}" in
+            pdev) SERVER_NAME="dpn-federator-server-2"; CLIENT_NAME="dpn-federator-client-2" ;;
+            ptest|puat) SERVER_NAME="dpn-federator-server-1"; CLIENT_NAME="dpn-federator-client-1" ;;
+            *)
+              case "${{ parameters.dpncluster }}" in
+                dpn01) CLUSTER_NUM=1 ;;
+                dpn02) CLUSTER_NUM=2 ;;
+                *) echo "##[error]Unknown dpncluster: ${{ parameters.dpncluster }}"; exit 1 ;;
+              esac
+              SERVER_NAME="dpn-federator-server-${CLUSTER_NUM}"
+              CLIENT_NAME="dpn-federator-client-${CLUSTER_NUM}"
+              ;;
+          esac
+
+          kubectl rollout status deployment/${SERVER_NAME} -n $(NAMESPACE) --timeout=300s
+          kubectl rollout status deployment/${CLIENT_NAME} -n $(NAMESPACE) --timeout=300s
+
+          echo " Checking Services..."
+          kubectl get svc -n $(NAMESPACE)
+
+          echo " Checking Pods..."
+          kubectl get pods -n $(NAMESPACE)
+
+          echo " Helm Status..."
+          helm status $(RELEASE_NAME) -n $(NAMESPACE)
+
+          echo "=========================================="
+          echo " CAPTURE DEPLOYED IMAGE DIGEST"
+          echo "=========================================="
+
+          SERVER_DIGEST=$(kubectl get pods -n $(NAMESPACE) \
+            -l app=${SERVER_NAME} \
+            -o jsonpath='{.items[0].status.containerStatuses[0].imageID}')
+
+          if [ -z "$SERVER_DIGEST" ]; then
+            echo "##[error]Could not resolve deployed server image digest from pod status"
+            exit 1
+          fi
+
+          CLIENT_DIGEST=$(kubectl get pods -n $(NAMESPACE) \
+            -l app=${CLIENT_NAME} \
+            -o jsonpath='{.items[0].status.containerStatuses[0].imageID}')
+
+          if [ -z "$CLIENT_DIGEST" ]; then
+            echo "##[error]Could not resolve deployed client image digest from pod status"
+            exit 1
+          fi
+
+          echo "Server image digest: $SERVER_DIGEST"
+          echo "Client image digest: $CLIENT_DIGEST"
+
+          mkdir -p $(Build.ArtifactStagingDirectory)/deployed-digest
+
+          {
+            echo "$SERVER_DIGEST"
+            echo "component=federator-server"
+            echo "environment=${{ parameters.environment }}"
+            echo "dpncluster=${{ parameters.dpncluster }}"
+            echo "imageTag=${{ parameters.imageTag }}"
+          } > $(Build.ArtifactStagingDirectory)/deployed-digest/federator-server-digest.txt
+
+          {
+            echo "$CLIENT_DIGEST"
+            echo "component=federator-client"
+            echo "environment=${{ parameters.environment }}"
+            echo "dpncluster=${{ parameters.dpncluster }}"
+            echo "imageTag=${{ parameters.imageTag }}"
+          } > $(Build.ArtifactStagingDirectory)/deployed-digest/federator-client-digest.txt
+
+          echo "Digests written to artifact staging directory"
+
+          echo "=========================================="
+          echo "DPN DEPLOYMENT COMPLETE"
+          echo "=========================================="
+
+    - task: PublishBuildArtifacts@1
+      displayName: 'Publish Deployed Image Digest'
+      inputs:
+        pathtoPublish: '$(Build.ArtifactStagingDirectory)/deployed-digest'
+        ArtifactName: 'deployed-image-digest'

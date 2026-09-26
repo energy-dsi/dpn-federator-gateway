@@ -1,0 +1,190 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.kafkaUI.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ .Values.kafkaUI.name }}
+spec:
+  replicas: {{ .Values.kafkaUI.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ .Values.kafkaUI.name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.kafkaUI.name }}
+    spec:
+      containers:
+        - name: {{ .Values.kafkaUI.name }}
+          image: "{{ .Values.kafkaUI.image.repository }}:{{ .Values.kafkaUI.image.tag }}"
+          imagePullPolicy: {{ .Values.kafkaUI.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+          ports:
+            - containerPort: {{ .Values.kafkaUI.service.port }}
+          env:
+            {{- if ne .Values.kafka.authMode "plaintext" }}
+            # Declared first so $(KAFKA_UI_TS_PASSWORD) resolves in JAVA_OPTS via K8s env substitution
+            - name: KAFKA_UI_TS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: tls-auth-secret
+                  key: TRUSTSTORE_PASSWORD
+            # Without this, the JVM's default trust store doesn't include the CA
+            # that signs Keycloak's TLS certificate, and the token exchange in
+            # Kafka UI's own OAuth2 login fails with "PKIX path building failed:
+            # unable to find valid certification path to requested target".
+            # dpn-tls (mounted at /etc/secrets below) carries a pre-built
+            # truststore.jks with that CA already in it - same fix already
+            # applied in dpn-health-monitoring-service's equivalent Kafka UI
+            # (charts/kafka-stack/templates/zookeeper-kafka-lb.yaml).
+            - name: JAVA_OPTS
+              value: "-Djavax.net.ssl.trustStore=/etc/secrets/truststore.jks -Djavax.net.ssl.trustStoreType=PKCS12 -Djavax.net.ssl.trustStorePassword=$(KAFKA_UI_TS_PASSWORD)"
+            {{- end }}
+            {{- range $key, $value := .Values.kafkaUI.env }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+            {{- if ne .Values.kafka.authMode "plaintext" }}
+            - name: KAFKA_CLUSTERS_0_PROPERTIES_SSL_TRUSTSTORE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: tls-auth-secret
+                  key: TRUSTSTORE_PASSWORD
+            - name: KAFKA_CLUSTERS_1_PROPERTIES_SSL_TRUSTSTORE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: tls-auth-secret
+                  key: TRUSTSTORE_PASSWORD
+            # Raw OAuth client secret — used in JAAS config string below via $(VAR) substitution.
+            # Same dpn-service-client secret Keycloak owns/asserts.
+            - name: KAFKA_OAUTH_CLIENT_SECRET_VALUE
+              valueFrom:
+                secretKeyRef:
+                  name: dpn-keycloak-secrets
+                  key: KC_SERVICE_CLIENT_SECRET
+            - name: KAFKA_CLUSTERS_0_PROPERTIES_SASL_JAAS_CONFIG
+              value: "org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule required clientId=\"{{ .Values.kafkaUI.oauth.clientId }}\" clientSecret=\"$(KAFKA_OAUTH_CLIENT_SECRET_VALUE)\";"
+            - name: KAFKA_CLUSTERS_1_PROPERTIES_SASL_JAAS_CONFIG
+              value: "org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule required clientId=\"{{ .Values.kafkaUI.oauth.clientId }}\" clientSecret=\"$(KAFKA_OAUTH_CLIENT_SECRET_VALUE)\";"
+            {{- end }}
+            {{- if .Values.kafkaUI.oidcRbac.enabled }}
+            # Same dpn-keycloak-secrets/KC_SERVICE_CLIENT_SECRET as the broker JAAS
+            # config above — reused here under its own name so the mounted
+            # oauth2-rbac.yml's ${KAFKA_UI_OIDC_CLIENT_SECRET} placeholder
+            # resolves without adding a second Key Vault entry.
+            - name: KAFKA_UI_OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: dpn-keycloak-secrets
+                  key: KC_SERVICE_CLIENT_SECRET
+            - name: SPRING_CONFIG_ADDITIONAL_LOCATION
+              value: "file:/config/oidc-rbac/oauth2-rbac.yml"
+            {{- end }}
+            {{- if .Values.kafkaUI.tls.enabled }}
+            # Only safe to enable where nothing else (e.g. an oauth2-proxy fronting this pod on
+            # plain HTTP) depends on this same listener staying plain-HTTP - Kafka UI's embedded
+            # server drops its HTTP listener entirely once SSL is on, there is no dual-protocol
+            # mode. Reuses the SAME dpn-tls keystore.jks (alias "dpn-server", already mounted
+            # below) Kafka brokers and Redis already use for their own TLS identity - no new
+            # cert/Secret needed.
+            - name: KAFKA_UI_KS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: tls-auth-secret
+                  key: KEYSTORE_PASSWORD
+            - name: SERVER_SSL_ENABLED
+              value: "true"
+            - name: SERVER_SSL_KEY_STORE
+              value: "/etc/secrets/keystore.jks"
+            - name: SERVER_SSL_KEY_STORE_TYPE
+              value: "PKCS12"
+            - name: SERVER_SSL_KEY_STORE_PASSWORD
+              value: "$(KAFKA_UI_KS_PASSWORD)"
+            - name: SERVER_SSL_KEY_ALIAS
+              value: "dpn-server"
+            {{- end }}
+          {{- if or (ne .Values.kafka.authMode "plaintext") .Values.kafkaUI.oidcRbac.enabled }}
+          volumeMounts:
+            {{- if ne .Values.kafka.authMode "plaintext" }}
+            - name: dpn-tls
+              mountPath: /etc/secrets
+              readOnly: true
+            {{- end }}
+            {{- if .Values.kafkaUI.oidcRbac.enabled }}
+            - name: oidc-rbac-config
+              mountPath: /config/oidc-rbac
+              readOnly: true
+            {{- end }}
+          {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /
+              port: {{ .Values.kafkaUI.service.port }}
+              {{- if .Values.kafkaUI.tls.enabled }}
+              # kubelet does not verify the certificate on an HTTPS probe, so the internal CA not
+              # being in any system trust store doesn't matter here.
+              scheme: HTTPS
+              {{- end }}
+            initialDelaySeconds: {{ .Values.kafkaUI.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.kafkaUI.readinessProbe.periodSeconds }}
+          livenessProbe:
+            httpGet:
+              path: /
+              port: {{ .Values.kafkaUI.service.port }}
+              {{- if .Values.kafkaUI.tls.enabled }}
+              scheme: HTTPS
+              {{- end }}
+            initialDelaySeconds: {{ .Values.kafkaUI.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.kafkaUI.livenessProbe.periodSeconds }}
+          {{- with .Values.kafkaUI.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- if or (ne .Values.kafka.authMode "plaintext") .Values.kafkaUI.oidcRbac.enabled }}
+      volumes:
+        {{- if ne .Values.kafka.authMode "plaintext" }}
+        - name: dpn-tls
+          secret:
+            secretName: dpn-tls
+        {{- end }}
+        {{- if .Values.kafkaUI.oidcRbac.enabled }}
+        - name: oidc-rbac-config
+          configMap:
+            name: {{ .Values.kafkaUI.name }}-oidc-rbac
+        {{- end }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.kafkaUI.name }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    app: {{ .Values.kafkaUI.name }}
+  ports:
+    - name: http
+      port: {{ .Values.kafkaUI.service.port }}
+      targetPort: {{ .Values.kafkaUI.service.port }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.kafkaUI.name }}-external
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+spec:
+  type: LoadBalancer
+  {{- with .Values.kafkaUI.service.externalLoadBalancerIP }}
+  loadBalancerIP: {{ . }}
+  {{- end }}
+  selector:
+    app: {{ .Values.kafkaUI.name }}
+  ports:
+    - name: http
+      port: {{ .Values.kafkaUI.service.port }}
+      targetPort: {{ .Values.kafkaUI.service.port }}
+

@@ -1,0 +1,66 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: federator-server-config
+  namespace: {{ .Release.Namespace }}
+data:
+  server.properties: |
+    kafka.bootstrapServers={{ .Values.federatorServer.config.kafkaBootstrapServers }}
+    kafka.defaultKeyDeserializerClass=org.apache.kafka.common.serialization.StringDeserializer
+    kafka.defaultValueDeserializerClass=uk.gov.dbt.ndtp.federator.access.AccessMessageDeserializer
+    kafka.consumerGroup=server.consumer
+    kafka.pollDuration=PT10S
+    kafka.pollRecords=100
+    {{- if eq .Values.kafka.authMode "sasl_ssl" }}
+    kafka.additional.security.protocol=SASL_SSL
+    kafka.additional.sasl.mechanism=OAUTHBEARER
+    kafka.additional.sasl.login.callback.handler.class=org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginCallbackHandler
+    kafka.additional.config.providers=env
+    kafka.additional.config.providers.env.class=org.apache.kafka.common.config.provider.EnvVarConfigProvider
+    kafka.additional.sasl.jaas.config=org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule required clientId="{{ .Values.kafkaSrc.oauth.clientId }}" clientSecret="${env:KAFKA_OAUTH_CLIENT_SECRET}" tokenEndpointUrl="{{ .Values.kafkaSrc.oauth.tokenEndpointUrl }}";
+    kafka.additional.sasl.oauthbearer.token.endpoint.url={{ .Values.kafkaSrc.oauth.tokenEndpointUrl }}
+    kafka.additional.ssl.truststore.location={{ .Values.kafkaSrc.tls.truststoreLocation }}
+    kafka.additional.ssl.truststore.type={{ .Values.kafkaSrc.tls.truststoreType }}
+    # Required: without the password the PKCS12 store opens with zero certificates, which
+    # fails the TLS handshake with "trustAnchors parameter must be non-empty".
+    kafka.additional.ssl.truststore.password=${env:KAFKA_SSL_TRUSTSTORE_PASSWORD}
+    {{- end }}
+
+    shared.headers=Security-Label^Content-Type
+    filter.shareAll=false
+
+    server.port={{ .Values.federatorServer.service.port }}
+    server.tlsEnabled=true
+    server.mtlsEnabled=false
+    server.keepAliveTime=10
+    server.certReloadIntervalSeconds=3600
+
+    server.p12FilePath=/tls/keystore.p12
+    server.p12Password=
+    server.truststoreFilePath=/tls/truststore.p12
+    server.truststorePassword=
+    server.heartbeat.enabled=true
+    server.heartbeat.interval=PT1H
+
+    common.configuration=/config/common-configuration.properties
+    connections.configuration=/config/connection-configuration.json
+
+    federator.producer.id=
+
+    management.node.base.url={{ .Values.federatorServer.config.management_node_base_url }}
+    management.node.request.timeout=60
+    management.node.cache.ttl.seconds=60
+    management.node.api.endpoints.producer=
+
+    # FQDN required (not just the short Service name) - Redis's TLS cert SAN is
+    # *.<namespace>.svc.cluster.local, and RedisUtil enables strict hostname verification,
+    # which fails against the short name ("hostname mismatch").
+    redis.host={{ .Values.federatorServer.config.redisHost }}.{{ .Release.Namespace }}.svc.cluster.local
+    redis.port={{ .Values.federatorServer.config.redisPort }}
+    redis.prefix=federator-server
+    redis.username=
+    redis.password=
+    redis.aes.key=
+
+    azure.storage.endpoint={{ .Values.federatorServer.storage.azure.endpoint }}
+    azure.storage.connection.string={{ .Values.federatorServer.storage.azure.connectionString }}

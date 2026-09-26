@@ -1,0 +1,328 @@
+name: DPN CD - Federator Gateway
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Select Environment"
+        required: true
+        default: "test"
+        type: choice
+        options:
+          - dev
+          - test
+
+      cluster:
+        description: "Target DPN Cluster"
+        required: true
+        default: "dpn01"
+        type: choice
+        options:
+          - dpn01
+          - dpn02
+
+      cloud:
+        description: "Target Cloud Provider"
+        required: true
+        default: "aws"
+        type: choice
+        options:
+          - azure
+          - aws
+          - gcp
+
+      imageTag:
+        description: "Federator image tag"
+        required: true
+        type: string
+
+      serverImageRepository:
+        description: "Federator server image path AFTER <<GHCR IMAGE REGISTRY NAME>>/ (e.g. 1.0.1/dpn-federator-server) — leave blank to use the environment's configured repository"
+        required: false
+        default: ""
+        type: string
+
+      clientImageRepository:
+        description: "Federator client image path AFTER <<GHCR IMAGE REGISTRY NAME>>/ (e.g. 1.0.1/dpn-federator-client) — leave blank to use the environment's configured repository"
+        required: false
+        default: ""
+        type: string
+
+env:
+  PARAMETERS_FILE: .github/config/${{ inputs.cloud }}/${{ inputs.environment }}-${{ inputs.cluster }}.json
+  HELM_DIR: dpn-federator-gateway/charts/dpn-platform
+  RELEASE_NAME: dpn-platform
+  VALUES_FILE: dpn-federator-gateway/charts/dpn-platform/values/${{ inputs.cloud }}/${{ inputs.environment }}-${{ inputs.cluster }}.yaml
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    name: Helm Deploy
+    runs-on: [self-hosted, vmss]
+    environment: ${{ inputs.environment }}-${{ inputs.cluster }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Applied Parameters
+        shell: bash
+        run: |
+          echo "environment=${{ inputs.environment }}"
+          echo "cluster=${{ inputs.cluster }}"
+          echo "cloud=${{ inputs.cloud }}"
+          echo "imageTag=${{ inputs.imageTag }}"
+          echo "serverImageRepository=${{ inputs.serverImageRepository }}"
+          echo "clientImageRepository=${{ inputs.clientImageRepository }}"
+
+      - name: Read Deployment Config
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ ! -f "${PARAMETERS_FILE}" ]; then
+            echo "ERROR: ${PARAMETERS_FILE} not found!"
+            exit 1
+          fi
+
+          echo "Loading config from ${PARAMETERS_FILE}"
+          for key in $(jq -r 'keys_unsorted[]' "${PARAMETERS_FILE}"); do
+            value=$(jq -r ".\"$key\"" "${PARAMETERS_FILE}")
+            echo "${key}=${value}" >> "$GITHUB_ENV"
+            echo "Set ${key}"
+          done
+
+      - name: Cloud Login
+        uses: ./.github/actions/cloud-login
+        with:
+          cloud: ${{ inputs.cloud }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          aws-region: ${{ env.AWS_REGION }}
+          aws-account-id: ${{ env.AWS_ACCOUNT_ID }}
+          eks-cluster: ${{ env.EKS_CLUSTER }}
+
+      - name: Verify Cluster Access
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          helm ls -n ns-dpn-01
+          kubectl get all -n ns-dpn-01
+
+      ###################################################################
+      # FETCH SECRETS FROM KEY VAULT (azure only)
+      #
+      # vaultConfig.truststorePassword only ever reaches the app via the
+      # rendered properties ConfigMap's vault.truststore.password= line.
+      # The container's actual -Dvault.truststore.password JVM flag reads
+      # $VAULT_TRUSTSTORE_PASSWORD instead, sourced by the chart directly
+      # from the certificate-manager-secrets k8s Secret (see
+      # federator-server-deployment.yaml), which already exists on AWS.
+      # So this fetch — and the --set vaultConfig.truststorePassword below —
+      # is Azure-only: the ConfigMap value it feeds is always shadowed by
+      # the -D flag and never actually read by the app.
+      ###################################################################
+      - name: Fetch Secrets From Key Vault
+        if: ${{ inputs.cloud == 'azure' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # TRUSTSTORE-PASSWORD is the canonical, actively-rotated Key Vault
+          # object dpn-tls-cd (dpn-federator-certificate-manager) writes on
+          # every cert renewal. VAULT-TRUSTSTORE-PASSWORD is a bootstrap-only
+          # artifact (vault-tls-bootstrap-cd) that's never touched again once
+          # an environment is stood up, so it can drift stale after rotation.
+          VAULT_TRUSTSTORE_PASSWORD=$(az keyvault secret show \
+            --vault-name "$KEY_VAULT_NAME" \
+            --name TRUSTSTORE-PASSWORD \
+            --query value -o tsv)
+
+          echo "::add-mask::$VAULT_TRUSTSTORE_PASSWORD"
+          echo "VAULT_TRUSTSTORE_PASSWORD=$VAULT_TRUSTSTORE_PASSWORD" >> "$GITHUB_ENV"
+
+          echo "Secrets fetched from $KEY_VAULT_NAME"
+
+      ###################################################################
+      # Kafka's OAuthBearer validator rejects every token Keycloak issues
+      # unless KAFKA_SASL_OAUTHBEARER_EXPECTED_ISSUER (kafkaSrc/kafkaTarget.
+      # oauth.expectedIssuer) matches the "iss" claim Keycloak actually
+      # stamps on its tokens - which is derived from Keycloak's KC_HOSTNAME,
+      # not from wherever this token happened to be fetched. On AWS,
+      # KC_HOSTNAME is pinned to Keycloak's own LoadBalancer hostname (see
+      # dpn-authentication-service's keycloak values) so that browser-facing
+      # UIs and their issuer checks agree - but that hostname churns any time
+      # Keycloak's Service is deleted/recreated. Fetch it fresh here instead
+      # of hardcoding it in values files, the same pattern already used for
+      # Vault AppRole role_ids and Keycloak's own KC_UI_HOST_* overrides.
+      ###################################################################
+      - name: Fetch Keycloak Issuer (AWS)
+        if: ${{ inputs.cloud == 'aws' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Only override expectedIssuer when KC_HOSTNAME is actually pinned —
+          # environments that leave it unset (e.g. test-dpn02) stamp "iss"
+          # with the internal hostname, and overriding to the ELB hostname
+          # there breaks EXPECTED_ISSUER validation for every real client.
+          KC_HOSTNAME_LIVE="$(kubectl exec -n "$NAMESPACE" dpn-keycloak-0 -c keycloak -- printenv KC_HOSTNAME 2>/dev/null || true)"
+
+          if [ -z "$KC_HOSTNAME_LIVE" ]; then
+            echo "KC_HOSTNAME is unset on dpn-keycloak-0 - leaving kafkaSrc/kafkaTarget.oauth.expectedIssuer at the values file's internal hostname."
+          else
+            KC_HOST="$(kubectl get svc dpn-keycloak-service-lb -n "$NAMESPACE" \
+              -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)"
+
+            if [ -n "$KC_HOST" ]; then
+              echo "KEYCLOAK_ISSUER=https://${KC_HOST}:8443/realms/dpn-realm" >> "$GITHUB_ENV"
+              echo "Resolved Keycloak issuer: https://${KC_HOST}:8443/realms/dpn-realm"
+            else
+              echo "::warning::Could not resolve dpn-keycloak-service-lb hostname - falling back to the values file's own kafkaSrc/kafkaTarget.oauth.expectedIssuer."
+            fi
+          fi
+
+      ###################################################################
+      # HELM DEPLOY
+      ###################################################################
+      - name: Helm Deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          EXTRA_ARGS=()
+          if [ -n "${{ inputs.serverImageRepository }}" ]; then
+            EXTRA_ARGS+=(--set federatorServer.image.repository="<<GHCR IMAGE REGISTRY NAME>>/${{ inputs.serverImageRepository }}")
+          fi
+          if [ -n "${{ inputs.clientImageRepository }}" ]; then
+            EXTRA_ARGS+=(--set federatorClient.image.repository="<<GHCR IMAGE REGISTRY NAME>>/${{ inputs.clientImageRepository }}")
+          fi
+          if [ "${{ inputs.cloud }}" = "azure" ]; then
+            EXTRA_ARGS+=(--set vaultConfig.truststorePassword="$VAULT_TRUSTSTORE_PASSWORD")
+          fi
+          if [ -n "${KEYCLOAK_ISSUER:-}" ]; then
+            EXTRA_ARGS+=(
+              --set kafkaSrc.oauth.expectedIssuer="$KEYCLOAK_ISSUER"
+              --set kafkaTarget.oauth.expectedIssuer="$KEYCLOAK_ISSUER"
+            )
+          fi
+
+          echo "========================================"
+          echo "HELM VALIDATION"
+          echo "========================================"
+          helm lint "$HELM_DIR"
+
+          helm upgrade --install "$RELEASE_NAME" "$HELM_DIR" \
+            -n "$NAMESPACE" \
+            --set federatorServer.image.tag="${{ inputs.imageTag }}" \
+            --set federatorClient.image.tag="${{ inputs.imageTag }}" \
+            "${EXTRA_ARGS[@]}" \
+            -f "$VALUES_FILE" \
+            --dry-run --debug >/dev/null
+
+          echo "Helm dry-run successful"
+
+          echo "========================================"
+          echo "HELM DEPLOY"
+          echo "========================================"
+          helm upgrade --install "$RELEASE_NAME" "$HELM_DIR" \
+            -n "$NAMESPACE" \
+            --set federatorServer.image.tag="${{ inputs.imageTag }}" \
+            --set federatorClient.image.tag="${{ inputs.imageTag }}" \
+            "${EXTRA_ARGS[@]}" \
+            -f "$VALUES_FILE" \
+            --debug
+
+          echo "========================================"
+          echo "POST-DEPLOY VERIFICATION"
+          echo "========================================"
+
+          echo "Checking Core Deployments..."
+          kubectl rollout status deployment/dpn-redis -n "$NAMESPACE" --timeout=300s
+          kubectl rollout status deployment/dpn-zookeeper-src -n "$NAMESPACE" --timeout=300s
+          kubectl rollout status deployment/dpn-zookeeper-target -n "$NAMESPACE" --timeout=300s
+          kubectl rollout status deployment/dpn-kafka-src -n "$NAMESPACE" --timeout=300s
+          kubectl rollout status deployment/dpn-kafka-target -n "$NAMESPACE" --timeout=300s
+          kubectl rollout status deployment/dpn-kafka-ui -n "$NAMESPACE" --timeout=300s
+
+          echo "Checking Federator Deployments..."
+          case "${{ inputs.cluster }}" in
+            dpn01) CLUSTER_NUM=1 ;;
+            dpn02) CLUSTER_NUM=2 ;;
+            *) echo "::error::Unknown cluster: ${{ inputs.cluster }}"; exit 1 ;;
+          esac
+          SERVER_NAME="dpn-federator-server-${CLUSTER_NUM}"
+          CLIENT_NAME="dpn-federator-client-${CLUSTER_NUM}"
+
+          kubectl rollout status deployment/"$SERVER_NAME" -n "$NAMESPACE" --timeout=300s
+          kubectl rollout status deployment/"$CLIENT_NAME" -n "$NAMESPACE" --timeout=300s
+
+          echo "Checking Services..."
+          kubectl get svc -n "$NAMESPACE"
+
+          echo "Checking Pods..."
+          kubectl get pods -n "$NAMESPACE"
+
+          echo "Helm Status..."
+          helm status "$RELEASE_NAME" -n "$NAMESPACE"
+
+          echo "SERVER_NAME=$SERVER_NAME" >> "$GITHUB_ENV"
+          echo "CLIENT_NAME=$CLIENT_NAME" >> "$GITHUB_ENV"
+
+      ###################################################################
+      # CAPTURE DEPLOYED IMAGE DIGESTS
+      ###################################################################
+      - name: Capture Deployed Image Digests
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SERVER_DIGEST=$(kubectl get pods -n "$NAMESPACE" \
+            -l app="$SERVER_NAME" \
+            -o jsonpath='{.items[0].status.containerStatuses[0].imageID}')
+
+          if [ -z "$SERVER_DIGEST" ]; then
+            echo "::error::Could not resolve deployed server image digest from pod status"
+            exit 1
+          fi
+
+          CLIENT_DIGEST=$(kubectl get pods -n "$NAMESPACE" \
+            -l app="$CLIENT_NAME" \
+            -o jsonpath='{.items[0].status.containerStatuses[0].imageID}')
+
+          if [ -z "$CLIENT_DIGEST" ]; then
+            echo "::error::Could not resolve deployed client image digest from pod status"
+            exit 1
+          fi
+
+          echo "Server image digest: $SERVER_DIGEST"
+          echo "Client image digest: $CLIENT_DIGEST"
+
+          mkdir -p "$GITHUB_WORKSPACE/deployed-digest"
+
+          {
+            echo "$SERVER_DIGEST"
+            echo "component=federator-server"
+            echo "environment=${{ inputs.environment }}"
+            echo "dpncluster=${{ inputs.cluster }}"
+            echo "imageTag=${{ inputs.imageTag }}"
+          } > "$GITHUB_WORKSPACE/deployed-digest/federator-server-digest.txt"
+
+          {
+            echo "$CLIENT_DIGEST"
+            echo "component=federator-client"
+            echo "environment=${{ inputs.environment }}"
+            echo "dpncluster=${{ inputs.cluster }}"
+            echo "imageTag=${{ inputs.imageTag }}"
+          } > "$GITHUB_WORKSPACE/deployed-digest/federator-client-digest.txt"
+
+          echo "Digests written to $GITHUB_WORKSPACE/deployed-digest"
+
+      - name: Publish Deployed Image Digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployed-image-digest
+          path: deployed-digest/

@@ -1,0 +1,479 @@
+# ════════════════════════════════════════════════════════════════════════════════
+# KAFKA AUTH MODE — change this ONE value to switch ALL brokers simultaneously
+#   plaintext  → no TLS, no auth (dev/test only, no certs needed)
+#   ssl        → TLS only, no token auth (mTLS if tls.clientAuth=required)
+#   sasl_ssl   → OAUTHBEARER over TLS (production default)
+# ════════════════════════════════════════════════════════════════════════════════
+kafka:
+  authMode: plaintext
+
+redis:
+  name: dpn-redis
+  replicaCount: 1
+  image:
+    repository: <<CONTAINER_REGISTRY_URL>>/dpn-redis
+    tag: "7.2"
+    pullPolicy: Always
+  service:
+    port: 6379
+    type: ClusterIP
+  args:
+    - "--save"
+    - ""
+    - "--appendonly"
+    - "no"
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "256Mi"
+
+zookeeperSrc:
+  name: dpn-zookeeper-src
+  replicaCount: 1
+  image:
+    repository: <<CONTAINER_REGISTRY_URL>>/dpn-zookeeper
+    tag: "7.5.3"
+    pullPolicy: Always
+  service:
+    port: 2181
+  env:
+    ZOOKEEPER_CLIENT_PORT: "2181"
+    ZOOKEEPER_SERVER_ID: "1"
+    ZOOKEEPER_SERVERS: "dpn-zookeeper-src:2888:3888"
+  readinessProbe:
+    initialDelaySeconds: 10
+    periodSeconds: 5
+  livenessProbe:
+    initialDelaySeconds: 20
+    periodSeconds: 10
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+  # Persist ZooKeeper state so the Kafka cluster ID survives ZK restarts.
+  # enabled: false -> ephemeral (emptyDir); ZK loses cluster ID on restart.
+  persistence:
+    enabled: true
+    storageClass: managed-premium
+    size: 8Gi
+  securityContext:
+    runAsUser: 1000
+    runAsGroup: 0
+    fsGroup: 0
+
+zookeeperTarget:
+  name: dpn-zookeeper-target
+  replicaCount: 1
+  image:
+    repository: <<CONTAINER_REGISTRY_URL>>/dpn-zookeeper
+    tag: "7.5.3"
+    pullPolicy: Always
+  service:
+    port: 2181
+  env:
+    ZOOKEEPER_CLIENT_PORT: "2181"
+    ZOOKEEPER_SERVER_ID: "1"
+    ZOOKEEPER_SERVERS: "dpn-zookeeper-target:2888:3888"
+  readinessProbe:
+    initialDelaySeconds: 10
+    periodSeconds: 5
+  livenessProbe:
+    initialDelaySeconds: 20
+    periodSeconds: 10
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+  # Persist ZooKeeper state so the Kafka cluster ID survives ZK restarts.
+  # enabled: false -> ephemeral (emptyDir); ZK loses cluster ID on restart.
+  persistence:
+    enabled: true
+    storageClass: managed-premium
+    size: 8Gi
+  securityContext:
+    runAsUser: 1000
+    runAsGroup: 0
+    fsGroup: 0
+
+kafkaSrc:
+  name: dpn-kafka-src
+  replicaCount: 1
+  image:
+    repository: <<CONTAINER_REGISTRY_URL>>/dpn-kafka
+    tag: "7.5.3"
+    pullPolicy: Always
+  service:
+    port: 9092
+  oauth:
+    clientId: ""
+    jwksUrl: <<your specific value>>
+    tokenEndpointUrl: ""
+    expectedAudience: ""
+    expectedIssuer: ""
+    adminUser: ""
+  tls:
+    keystoreLocation: /etc/secrets/keystore.jks
+    keystoreType: PKCS12
+    truststoreLocation: /etc/secrets/truststore.jks
+    truststoreType: PKCS12
+    keyPassword: ""
+    clientAuth: none
+  env:
+    KAFKA_BROKER_ID: "1"
+    KAFKA_ZOOKEEPER_CONNECT: "dpn-zookeeper-src:2181"
+    KAFKA_INTER_BROKER_LISTENER_NAME: "INTERNAL"
+    KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+    KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+    KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+    KAFKA_MESSAGE_MAX_BYTES: "10485760"
+    KAFKA_REPLICA_FETCH_MAX_BYTES: "10485760"
+    KAFKA_LOG_RETENTION_MS: "-1"
+    KAFKA_LOG_RETENTION_BYTES: "-1"
+    KAFKA_LOG_DIRS: "/var/lib/kafka/data/data"
+  readinessProbe:
+    initialDelaySeconds: 20
+    periodSeconds: 10
+  livenessProbe:
+    initialDelaySeconds: 40
+    periodSeconds: 20
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+    limits:
+      cpu: "1000m"
+      memory: "2Gi"
+  persistence:
+    enabled: true
+    storageClass: managed-premium
+    size: 128Gi
+  securityContext:
+    runAsUser: 1001
+    runAsGroup: 0
+    fsGroup: 0
+
+kafkaTarget:
+  name: dpn-kafka-target
+  replicaCount: 1
+  image:
+    repository: <<CONTAINER_REGISTRY_URL>>/dpn-kafka
+    tag: "7.5.3"
+    pullPolicy: Always
+  service:
+    port: 9092
+  oauth:
+    clientId: ""
+    jwksUrl: <<your specific value>>
+    tokenEndpointUrl: ""
+    expectedAudience: ""
+    expectedIssuer: ""
+    adminUser: ""
+  tls:
+    keystoreLocation: /etc/secrets/keystore.jks
+    keystoreType: PKCS12
+    truststoreLocation: /etc/secrets/truststore.jks
+    truststoreType: PKCS12
+    keyPassword: ""
+    clientAuth: none
+  env:
+    KAFKA_BROKER_ID: "1"
+    KAFKA_ZOOKEEPER_CONNECT: "dpn-zookeeper-target:2181"
+    KAFKA_INTER_BROKER_LISTENER_NAME: "INTERNAL"
+    KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+    KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+    KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+    KAFKA_MESSAGE_MAX_BYTES: "10485760"
+    KAFKA_REPLICA_FETCH_MAX_BYTES: "10485760"
+    KAFKA_ADVERTISED_LISTENERS: "INTERNAL://dpn-kafka-target:9092,INTERNAL_FQDN://dpn-kafka-target.ns-dpn-01.svc.cluster.local:9093"
+    KAFKA_LOG_RETENTION_MS: "-1"
+    KAFKA_LOG_RETENTION_BYTES: "-1"
+    KAFKA_LOG_DIRS: "/var/lib/kafka/data/data"
+    
+  readinessProbe:
+    initialDelaySeconds: 20
+    periodSeconds: 10
+  livenessProbe:
+    initialDelaySeconds: 40
+    periodSeconds: 20
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+    limits:
+      cpu: "1000m"
+      memory: "2Gi"
+  persistence:
+    enabled: true
+    storageClass: managed-premium
+    size: 128Gi
+  securityContext:
+    runAsUser: 1001
+    runAsGroup: 0
+    fsGroup: 0
+    
+kafkaUI:
+  name: dpn-kafka-ui
+  replicaCount: 1
+  image:
+    repository: <<CONTAINER_REGISTRY_URL>>/ui-kafka
+    tag: "latest-dpn02"
+    pullPolicy: Always
+  oauth:
+    clientId: ""
+  service:
+#    port: 8080
+    port: 8086
+
+  # Off by default. Only safe to enable in an environment where nothing else (e.g. an
+  # oauth2-proxy) depends on this pod's listener staying plain-HTTP - see kafka-ui.yaml for why.
+  tls:
+    enabled: false
+
+  # Off by default — see values-dev-dpn01.yaml for the enabled shape and
+  # templates/kafka-ui-oidc-rbac-configmap.yaml for what this feeds.
+  oidcRbac:
+    enabled: false
+    browserHost: ""
+    keycloakBaseUrl: ""
+    keycloakRealm: ""
+    clusterNames: []
+
+  env:
+    # Source Kafka
+    KAFKA_CLUSTERS_0_NAME: "source"
+    KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: "dpn-kafka-src:9092"
+    KAFKA_CLUSTERS_0_ZOOKEEPER: "dpn-zookeeper-src:2181"
+    # Target Kafka
+    KAFKA_CLUSTERS_1_NAME: "target"
+    KAFKA_CLUSTERS_1_BOOTSTRAPSERVERS: "dpn-kafka-target:9092"
+    KAFKA_CLUSTERS_1_ZOOKEEPER: "dpn-zookeeper-target:2181"
+    # UI Config
+#    SERVER_PORT: "8080"
+    SERVER_PORT: "8086"
+
+    AUTH_TYPE: "DISABLED"
+  readinessProbe:
+    initialDelaySeconds: 10
+    periodSeconds: 5
+  livenessProbe:
+    initialDelaySeconds: 30
+    periodSeconds: 10
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+
+kafkaTestData:
+  name: kafka-test-data
+  knowledgeFiles:
+    - simple-sample-test.dat
+    - simple-sample-test1.dat
+    - simple-sample-test2.dat
+
+federatorServer:
+  name: dpn-federator-server-1
+  replicaCount: 1
+  image:
+    repository: <<CONTAINER_REGISTRY_URL>>/federator-server
+    tag: "2.0.0"
+    pullPolicy: Always
+  service:
+    type: ClusterIP
+    port: 50051
+    lbPort: 50051
+    internalLoadBalancer: true
+    loadBalancerIP: <<your specific value>>
+  config:
+    management_node_base_url: <<your specific value>>
+    kafkaBootstrapServers: dpn-kafka-src:9092
+    redisHost: dpn-redis
+    redisPort: 6379
+  keycloak:
+    authEnabled: true
+  redis:
+    tlsEnabled: true
+    truststorePath: /tls/truststore.p12
+  idp:
+    jwksUrl: <<your specific value>>
+    tokenUrl: <<your specific value>>
+    tokenBackoff: 1000
+    truststorePath: /tls/truststore.p12
+    keystorePath: /tls/client.p12
+    authMode: "private_key_jwt"
+    jwtAlgorithm: "RS256"
+    jwtKeyAlias: "federator"
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "512Mi"
+    limits:
+      cpu: "1000m"
+      memory: "1Gi"
+  storage:
+    azure:
+      endpoint: ""
+      connectionString: ""
+federatorClient:
+  name: dpn-federator-client-1
+  replicaCount: 1
+  image:
+    repository: <<CONTAINER_REGISTRY_URL>>/federator-client
+    tag: "2.0.0"
+    pullPolicy: Always
+  service:
+    grpcPort: 50052
+    jobRunnerPort: 8085
+    internalLoadBalancer: true
+    loadBalancerIP: <<your specific value>>
+  config:
+    management_node_base_url: <<your specific value>>
+    kafkaBootstrapServers: dpn-kafka-target:9092
+    redisHost: dpn-redis
+    redisPort: 6379
+    topicPrefix: federated-client1
+    targetTopic: dp-consumer-topic-stage
+    clientport: 50051
+  # Keycloak-based authentication in front of the Job Runner UI (JobRunr dashboard). Disabled by
+  # default so behaviour is unchanged unless explicitly enabled per environment - see
+  # values-dev-dpn01.yaml / values-dev-dpn02.yaml for a populated example.
+  auth:
+    enabled: false
+    issuerUrl: ""
+    audience: ""
+    # Two independent roles gate two independent access levels: adminRole gets full access
+    # (view + trigger/requeue/delete), readerRole gets view-only access. Leave both blank to
+    # disable role gating (any authenticated user gets full access).
+    adminRole: ""
+    readerRole: ""
+    # Standard Authorization: Bearer <token> header - the caller obtains a Keycloak access
+    # token directly (e.g. via the token endpoint) and attaches it themselves, since there is
+    # no login-proxy in front of the dashboard.
+    headerName: "Authorization"
+    headerScheme: "Bearer"
+  keycloak:
+    authEnabled: true
+  redis:
+    tlsEnabled: true
+    truststorePath: /tls/truststore.p12
+  idp:
+    clientId: ztf-client
+    jwksUrl: <<your specific value>>
+    tokenUrl: <<your specific value>>
+    tokenBackoff: 1000
+    truststorePath: /tls/truststore.p12
+    keystorePath: /tls/client.p12
+    authMode: "private_key_jwt"
+    jwtAlgorithm: "RS256"
+    jwtKeyAlias: "federator"
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "512Mi"
+    limits:
+      cpu: "1000m"
+      memory: "1Gi"
+  storage:
+    provider: AZURE
+    tempDir: ""
+    azure:
+      container: ""
+      endpoint: ""
+      connectionString: ""
+
+keyvault:
+  # Master switch for secret sourcing:
+  #   enabled: true  -> pull secrets from Azure Key Vault via SecretProviderClass (CSI driver)
+  #   enabled: false -> Key Vault not used; create the Kubernetes Secret directly from the
+  #                     values under `secrets:` below (fallback mode)
+  enabled: true
+  clientID:
+  name:
+  tenantId:
+
+# Fallback secret values. Used ONLY when keyvault.enabled = false.
+# When keyvault.enabled = true these are ignored (the secret is synced from Key Vault).
+# Prefer injecting these at deploy time via --set / --set-file rather than committing values.
+secrets:
+  server:
+    storageConnectionString: ""
+  client:
+    storageConnectionString: ""
+
+fileShare:
+     pvcName: pvc-dpn-certs-fileshare
+
+vaultConfig:
+  uri: https://vault-https.ns-dpn-01.svc.cluster.local:8200
+  truststorePath: /vault/truststore/truststore.jks
+  truststorePassword: ""
+  keystorePasswordPath: node-net/client/keystore-password#password
+  truststorePasswordPath: node-net/client/truststore-password#password
+  # Vault authentication method: token | approle
+  authMethod: approle
+  appRole:
+    mountPath: approle
+    roleId: ""                 # override per env values file (role_id is not sensitive)
+    secretId: ""               # only used when useSecretIdRef=false (NOT recommended)
+    # When true, VAULT_SECRET_ID is sourced from a Kubernetes Secret via
+    # secretKeyRef instead of a plaintext value. Default false preserves the
+    # existing behaviour for all envs; set true per-env (e.g. dev-dpn01/02).
+    useSecretIdRef: false
+    secretIdSecretName: certificate-manager-secrets
+    secretIdSecretKey: VAULT_APPROLE_SECRET_ID
+    renewalintervalSecs: 300
+  tlsEnabled: true
+  tlsBasePath: node-net/client
+  tlsKeystoreAlias: federator
+  # Mount the cert-manager SMB/EFS fileshare PVC at /tls. Default true keeps
+  # existing envs unchanged. Set false when ALL TLS material is sourced from
+  # Vault (vault.tls.enabled=true) so the SMB share can be decommissioned.
+  mountCertFileShare: true
+otel:
+  # Same shape as kafka.authMode/kafkaUI.tls.enabled elsewhere in this chart: one flag drives
+  # both the OTLP endpoint scheme and whether any cert material is required at all. When true
+  # (default - matches every environment's behavior before this flag existed), the deployment
+  # templates add OTEL_EXPORTER_OTLP_TRUSTSTORE_PATH/_PASSWORD (see the comment below) and set
+  # the endpoint to https:// with INSECURE=false. When false, the endpoint switches to http://,
+  # INSECURE is set to true, and the truststore env vars are omitted entirely - no cert of any
+  # kind is needed in that mode. NOTE: the collector's own OTLP receivers currently terminate
+  # TLS unconditionally (see dpn-health-monitoring-service) - a plaintext exporter against that
+  # listener fails the handshake outright rather than falling back, so tls.enabled=false only
+  # works once the collector side also exposes a genuine plaintext listener.
+  tls:
+    enabled: true
+  collector:
+    host: "dpn-otel-collector.ns-dpn-health-01.svc.cluster.local"
+    port: 4318
+  env:
+    FEDERATOR_CLIENT_PROPERTIES: "src/configs/client.properties"
+
+    OTEL_SERVICE_NAME_CLIENT: "federator-client"
+    OTEL_TRACES_SAMPLER: "parentbased_traceidratio"
+    OTEL_TRACES_SAMPLER_ARG: "1.0"
+    OTEL_EXPORTER_OTLP_PROTOCOL: "http/protobuf"
+
+    FEDERATOR_SERVER_PROPERTIES: "src/configs/server.properties"
+
+    OTEL_SERVICE_NAME_SERVER: "federator-server"
+  # Trust anchor for the OTel Collector's OTLP HTTPS receiver (server-side TLS only, no
+  # client cert), used only when otel.tls.enabled is true: reuses the SAME common truststore
+  # Vault's own TLS connection already uses (.Values.vaultConfig.truststorePath, the
+  # cert-manager-truststore Secret already mounted at /vault/truststore in both deployments)
+  # and the SAME VAULT_TRUSTSTORE_PASSWORD (certificate-manager-secrets/VAULT_SSL_TRUST_STORE_PASSWORD).
+  # No separate CA cert/Secret is provisioned for OTel, and no new truststore either. The OTel
+  # Java autoconfigure SDK has no native JKS+password support, so OpenTelemetryConfig.java
+  # builds a trust-only SSLContext from this truststore itself (see OtlpTruststoreSupport) and
+  # swaps it into the OTLP exporters via the SDK's exporter-customizer hooks.
+

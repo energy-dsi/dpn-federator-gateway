@@ -1,0 +1,53 @@
+# Minimal local OTel Collector config for testing dpn-federator-gateway telemetry.
+# Receives OTLP from federator-server / federator-client and prints everything to its own
+# console via the debug exporter - enough to confirm spans/logs are arriving correctly before
+# wiring up a real backend (Jaeger, Tempo, etc.) or the shared dpn-otel-collector-health.
+#
+# DSI EDIT (stale-comment fix): this previously described a filelog-based receiver reading
+# OtelJsonLayout console output from disk, as a workaround for OTLP export being disabled. That
+# workaround is gone - OpenTelemetryConfig.java installs the OTLP-exporting OpenTelemetryAppender
+# directly, and OtelJsonLayout has been removed as dead code (it was only ever wired via the
+# orphaned lb.xml, which nothing loaded). The receivers block below is otlp-only, matching that.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+        # Server-side TLS only (no client cert required), matching the real DPN OTel
+        # Collector's OTLP HTTPS receiver. Reuses the same self-signed dpn-observability
+        # cert/key already used locally for Keycloak's HTTPS listener (see
+        # docker-grpc-resources/docker-compose-shared.yml's KC_HTTPS_KEY_STORE_FILE) rather
+        # than a separate cert - same file-based approach as the JobRunr dashboard's TLS
+        # (no Vault involved). Paths are absolute container paths - when running this
+        # collector, mount docker-grpc-resources/certs/dpn-observability to /etc/otel-certs
+        # (see docs/running-locally.md for the exact `docker run` command).
+        tls:
+          cert_file: /etc/otel-certs/dpn-observability-fullchain.crt
+          key_file: /etc/otel-certs/dpn-observability.key
+
+processors:
+  batch:
+    timeout: 5s
+    send_batch_size: 512
+
+exporters:
+  debug:
+    verbosity: detailed
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]
+    metrics:
+      receivers: [ otlp ]
+      processors: [ batch ]
+      exporters: [ debug ]

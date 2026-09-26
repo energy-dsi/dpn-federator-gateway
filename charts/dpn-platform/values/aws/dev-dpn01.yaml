@@ -1,0 +1,510 @@
+# =============================================================================
+# Federator Gateway (dpn-platform) — AWS dev-dpn01 values
+# EKS     : <<your specific value>>
+# Account : <<your specific value>>
+# Region  : eu-west-2
+#
+# STATUS: draft — derived from ../test-dpn01.yaml (the confirmed-working AWS
+# reference) via deterministic account/cluster substitution, with dev-specific
+# overrides applied on top where ../azure/dev-dpn01.yaml differs from
+# ../azure/test-dpn01.yaml for a genuine environment reason:
+#   - management_node_base_url / idp.jwksUrl / idp.tokenUrl now point at the
+#     dev management-node domain (<<your specific value>>) instead of test's
+#     <<your specific value>>.
+#   - idp.clientId changed to <<your specific value>> (the
+#     dev-dpn01 IdP client registration per ../azure/dev-dpn01.yaml) instead
+#     of test-dpn01's <<your specific value>>.
+#   - federatorServer.service no longer requests an internet-facing NLB with
+#     pinned Elastic IPs. That override in test-dpn01 was for an explicit,
+#     test-only request (2026-09-11), and the EIP allocations referenced
+#     there (eipalloc-0cfa33945c92513e2 / eipalloc-0d65217c30ab68701) belong
+#     to the TEST account (<<your specific value>>) — they are not valid in this account
+#     and no equivalent EIPs have been provisioned for dev-dpn01. Left as the
+#     internal NLB default (internalLoadBalancer: true) used everywhere else
+#     in this repo; if dev-dpn01 needs the same external+pinned-IP setup,
+#     new EIPs must be allocated in <<your specific value>> first.
+#
+# Everything else below is a straight account/cluster substitution from
+# test-dpn01 and carries the same open items:
+#   1. vaultConfig.appRole.roleId is NOT set — needs the real AppRole role_id
+#      for this Vault mount on dev-dpn01. Do NOT reuse azure dev-dpn01's
+#      role_id (<<your specific value>>) — that is a different,
+#      Azure-specific AppRole mount, same rule that blocked test's AWS files
+#      from reusing azure's role_id.
+#   2. secretsManager.secretPrefix below assumes KEYCLOAK_ADMIN_PASSWORD,
+#      KC_HTTPS_KEY_STORE_PASSWORD, KC_HTTPS_TRUST_STORE_PASSWORD,
+#      KAFKA_OAUTH_CLIENT_SECRET, UNIVERSAL_DPN_CERT_PASSWORD exist under
+#      this prefix in Secrets Manager — none of this has been created yet
+#      for dev-dpn01.
+#   3. serviceAccount.irsaRoleArn is a placeholder ARN, not a real role.
+#      The real role must trust
+#      system:serviceaccount:ns-dpn-01:dpn-federator-gateway for
+#      sts:AssumeRoleWithWebIdentity, and grant s3 read/write on
+#      federatorClient.storage.aws.bucket, plus secretsmanager:GetSecretValue
+#      on secretsManager.secretPrefix — none of this IAM exists yet.
+#   4. federatorClient.storage.aws.bucket below is derived by the same naming
+#      formula test used ("dpn-<env>-<cluster#>-<account>-<region>-data") but
+#      has NOT been confirmed as actually provisioned for dev-dpn01 — verify
+#      it exists (or provision it) before deploy.
+#   5. idp.clientId above (17b49eb6-...) is carried over from
+#      azure/dev-dpn01.yaml, which assumes AWS dev-dpn01 shares the same
+#      management-node IdP client registration as azure dev-dpn01. Confirm
+#      this assumption before relying on federator client/server auth.
+# =============================================================================
+
+cloudProvider: aws
+
+imagePullSecret: ghcr-pull-secret
+
+secretsManager:
+  secretPrefix: "dpn/dev-dpn01/federator-gateway"
+
+serviceAccount:
+  create: true
+  name: "dpn-federator-gateway"
+  irsaRoleArn: "<<your specific value>>"
+
+redis:
+  name: dpn-redis
+  replicaCount: 1
+  image:
+    repository: <<GHCR IMAGE REGISTRY NAME>>/dpn-redis
+    tag: "7.2"
+    pullPolicy: Always
+  service:
+    port: 6379
+    type: ClusterIP
+  args:
+    - "--save"
+    - ""
+    - "--appendonly"
+    - "no"
+    - "--port"
+    - "0"
+    - "--tls-port"
+    - "6379"
+    - "--tls-cert-file"
+    - "/tls/redis.crt"
+    - "--tls-key-file"
+    - "/tls/redis.key"
+    - "--tls-ca-cert-file"
+    - "/tls/ca.crt"
+    - "--tls-auth-clients"
+    - "no"
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "256Mi"
+
+zookeeperSrc:
+  name: dpn-zookeeper-src
+  replicaCount: 1
+  image:
+    repository: <<GHCR IMAGE REGISTRY NAME>>/dpn-zookeeper
+    tag: "7.5.3"
+    pullPolicy: Always
+  service:
+    port: 2181
+  env:
+    ZOOKEEPER_CLIENT_PORT: "2181"
+    ZOOKEEPER_SERVER_ID: "1"
+    ZOOKEEPER_SERVERS: "dpn-zookeeper-src:2888:3888"
+  readinessProbe:
+    initialDelaySeconds: 10
+    periodSeconds: 5
+  livenessProbe:
+    initialDelaySeconds: 20
+    periodSeconds: 10
+  persistence:
+    enabled: true
+    storageClass: gp3
+    size: 8Gi
+  securityContext:
+    runAsUser: 1000
+    runAsGroup: 0
+    fsGroup: 0
+
+zookeeperTarget:
+  name: dpn-zookeeper-target
+  replicaCount: 1
+  image:
+    repository: <<GHCR IMAGE REGISTRY NAME>>/dpn-zookeeper
+    tag: "7.5.3"
+    pullPolicy: Always
+  service:
+    port: 2181
+  env:
+    ZOOKEEPER_CLIENT_PORT: "2181"
+    ZOOKEEPER_SERVER_ID: "1"
+    ZOOKEEPER_SERVERS: "dpn-zookeeper-target:2888:3888"
+  readinessProbe:
+    initialDelaySeconds: 10
+    periodSeconds: 5
+  livenessProbe:
+    initialDelaySeconds: 20
+    periodSeconds: 10
+  persistence:
+    enabled: true
+    storageClass: gp3
+    size: 8Gi
+  securityContext:
+    runAsUser: 1000
+    runAsGroup: 0
+    fsGroup: 0
+
+# --- Kafka broker auth: SASL_SSL/OAUTHBEARER via Keycloak (dev-dpn01) ---
+kafka:
+  authMode: sasl_ssl
+
+kafkaSrc:
+  name: dpn-kafka-src
+  replicaCount: 1
+  image:
+    repository: <<GHCR IMAGE REGISTRY NAME>>/dpn-kafka
+    tag: "7.5.3"
+    pullPolicy: Always
+  service:
+    port: 9092
+  # OAuth settings — used only when kafka.authMode=sasl_ssl
+  oauth:
+    clientId: dpn-service-client
+    # clientSecret → Secrets Manager: <secretPrefix>/KAFKA_OAUTH_CLIENT_SECRET
+    jwksUrl: https://dpn-keycloak.ns-dpn-01.svc.cluster.local:8443/realms/dpn-realm/protocol/openid-connect/certs
+    tokenEndpointUrl: https://dpn-keycloak.ns-dpn-01.svc.cluster.local:8443/realms/dpn-realm/protocol/openid-connect/token
+    expectedAudience: dpn-service-client
+    expectedIssuer: https://dpn-keycloak.ns-dpn-01.svc.cluster.local:8443/realms/dpn-realm
+    adminUser: admin
+    # adminPassword → Secrets Manager: <secretPrefix>/KEYCLOAK_ADMIN_PASSWORD
+  env:
+    KAFKA_BROKER_ID: "1"
+    KAFKA_ZOOKEEPER_CONNECT: "dpn-zookeeper-src:2181"
+    KAFKA_INTER_BROKER_LISTENER_NAME: "INTERNAL"
+    KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+    KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+    KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+    KAFKA_MESSAGE_MAX_BYTES: "10485760"
+    KAFKA_REPLICA_FETCH_MAX_BYTES: "10485760"
+    KAFKA_LOG_RETENTION_MS: "-1"
+    KAFKA_LOG_RETENTION_BYTES: "-1"
+    KAFKA_LOG_DIRS: "/var/lib/kafka/data/data"
+    # -Xmx/-Xms for the broker JVM. Without this, the JVM's default heap
+    # sizing is too small for a real broker under admin-client/consumer-group
+    # load - confirmed live on test-dpn01 via java.lang.OutOfMemoryError:
+    # Java heap space from kafka-admin-client-thread while calling listTopics.
+    KAFKA_HEAP_OPTS: "-Xmx1G -Xms1G"
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "1Gi"
+    limits:
+      cpu: "1000m"
+      memory: "2Gi"
+  readinessProbe:
+    initialDelaySeconds: 20
+    periodSeconds: 10
+  livenessProbe:
+    initialDelaySeconds: 40
+    periodSeconds: 20
+  persistence:
+    enabled: true
+    storageClass: gp3
+    size: 128Gi
+  securityContext:
+    runAsUser: 1001
+    runAsGroup: 0
+    fsGroup: 0
+
+kafkaTarget:
+  name: dpn-kafka-target
+  replicaCount: 1
+  image:
+    repository: <<GHCR IMAGE REGISTRY NAME>>/dpn-kafka
+    tag: "7.5.3"
+    pullPolicy: Always
+  service:
+    port: 9092
+  # OAuth settings — used only when kafka.authMode=sasl_ssl
+  oauth:
+    clientId: dpn-service-client
+    # clientSecret → Secrets Manager: <secretPrefix>/KAFKA_OAUTH_CLIENT_SECRET
+    jwksUrl: https://dpn-keycloak.ns-dpn-01.svc.cluster.local:8443/realms/dpn-realm/protocol/openid-connect/certs
+    tokenEndpointUrl: https://dpn-keycloak.ns-dpn-01.svc.cluster.local:8443/realms/dpn-realm/protocol/openid-connect/token
+    expectedAudience: dpn-service-client
+    expectedIssuer: https://dpn-keycloak.ns-dpn-01.svc.cluster.local:8443/realms/dpn-realm
+    adminUser: admin
+    # adminPassword → Secrets Manager: <secretPrefix>/KEYCLOAK_ADMIN_PASSWORD
+  env:
+    KAFKA_BROKER_ID: "1"
+    KAFKA_ZOOKEEPER_CONNECT: "dpn-zookeeper-target:2181"
+    KAFKA_INTER_BROKER_LISTENER_NAME: "INTERNAL"
+    KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+    KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+    KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+    KAFKA_MESSAGE_MAX_BYTES: "10485760"
+    KAFKA_REPLICA_FETCH_MAX_BYTES: "10485760"
+    KAFKA_LOG_RETENTION_MS: "-1"
+    KAFKA_LOG_RETENTION_BYTES: "-1"
+    KAFKA_LOG_DIRS: "/var/lib/kafka/data/data"
+    # -Xmx/-Xms for the broker JVM. Without this, the JVM's default heap
+    # sizing is too small for a real broker under admin-client/consumer-group
+    # load - confirmed live on test-dpn01 via java.lang.OutOfMemoryError:
+    # Java heap space from kafka-admin-client-thread while calling listTopics.
+    KAFKA_HEAP_OPTS: "-Xmx1G -Xms1G"
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "1Gi"
+    limits:
+      cpu: "1000m"
+      memory: "2Gi"
+  readinessProbe:
+    initialDelaySeconds: 20
+    periodSeconds: 10
+  livenessProbe:
+    initialDelaySeconds: 40
+    periodSeconds: 20
+  persistence:
+    enabled: true
+    storageClass: gp3
+    size: 128Gi
+  securityContext:
+    runAsUser: 1001
+    runAsGroup: 0
+    fsGroup: 0
+
+kafkaUI:
+  name: dpn-kafka-ui
+  replicaCount: 1
+  image:
+    repository: <<GHCR IMAGE REGISTRY NAME>>/ui-kafka
+    tag: "v0.7.2"
+    pullPolicy: Always
+  service:
+    port: 8086
+  oauth:
+    clientId: dpn-service-client
+  env:
+    # Source Kafka
+    KAFKA_CLUSTERS_0_NAME: "source"
+    KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: "dpn-kafka-src.ns-dpn-01.svc.cluster.local:9092"
+    KAFKA_CLUSTERS_0_ZOOKEEPER: "dpn-zookeeper-src:2181"
+    # kafka.authMode=sasl_ssl above only makes the chart auto-inject the
+    # truststore password + OAuth client secret (see templates/kafka-ui.yaml);
+    # these security-protocol/mechanism/endpoint properties still have to be
+    # set explicitly here, same as the azure values files already do --
+    # without them AdminClient defaults toward plaintext against a broker
+    # that's actually SASL_SSL, and every admin action (e.g. topic create)
+    # fails with a bare 500 "Error while creating AdminClient". Truststore
+    # is PKCS12 despite the .jks name (see create-dpn-tls.sh's keytool
+    # -storetype PKCS12) -- must be declared or the client defaults to JKS
+    # and fails to load it.
+    KAFKA_CLUSTERS_0_PROPERTIES_SECURITY_PROTOCOL: SASL_SSL
+    KAFKA_CLUSTERS_0_PROPERTIES_SASL_MECHANISM: OAUTHBEARER
+    KAFKA_CLUSTERS_0_PROPERTIES_SASL_LOGIN_CALLBACK_HANDLER_CLASS: org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginCallbackHandler
+    KAFKA_CLUSTERS_0_PROPERTIES_SASL_OAUTHBEARER_TOKEN_ENDPOINT_URL: https://dpn-keycloak.ns-dpn-01.svc.cluster.local:8443/realms/dpn-realm/protocol/openid-connect/token
+    KAFKA_CLUSTERS_0_PROPERTIES_SSL_TRUSTSTORE_TYPE: PKCS12
+    KAFKA_CLUSTERS_0_PROPERTIES_SSL_TRUSTSTORE_LOCATION: /etc/secrets/truststore.jks
+    # Target Kafka
+    KAFKA_CLUSTERS_1_NAME: "target"
+    KAFKA_CLUSTERS_1_BOOTSTRAPSERVERS: "dpn-kafka-target.ns-dpn-01.svc.cluster.local:9092"
+    KAFKA_CLUSTERS_1_ZOOKEEPER: "dpn-zookeeper-target:2181"
+    KAFKA_CLUSTERS_1_PROPERTIES_SECURITY_PROTOCOL: SASL_SSL
+    KAFKA_CLUSTERS_1_PROPERTIES_SASL_MECHANISM: OAUTHBEARER
+    KAFKA_CLUSTERS_1_PROPERTIES_SASL_LOGIN_CALLBACK_HANDLER_CLASS: org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginCallbackHandler
+    KAFKA_CLUSTERS_1_PROPERTIES_SASL_OAUTHBEARER_TOKEN_ENDPOINT_URL: https://dpn-keycloak.ns-dpn-01.svc.cluster.local:8443/realms/dpn-realm/protocol/openid-connect/token
+    KAFKA_CLUSTERS_1_PROPERTIES_SSL_TRUSTSTORE_TYPE: PKCS12
+    KAFKA_CLUSTERS_1_PROPERTIES_SSL_TRUSTSTORE_LOCATION: /etc/secrets/truststore.jks
+    # OAuthBearerLoginCallbackHandler's HTTPS call to the token endpoint above
+    # uses the JVM's default trust store (public CAs only) unless told
+    # otherwise -- Keycloak's cert is signed by the internal dpn-root CA, so
+    # without this the token fetch itself fails SSL verification.
+    JAVA_OPTS: "-Djavax.net.ssl.trustStore=/etc/secrets/truststore.jks -Djavax.net.ssl.trustStoreType=PKCS12 -Djavax.net.ssl.trustStorePassword=$(KAFKA_UI_TS_PASSWORD)"
+    # UI Config
+    SERVER_PORT: "8086"
+    AUTH_TYPE: "DISABLED"
+  readinessProbe:
+    initialDelaySeconds: 10
+    periodSeconds: 5
+  livenessProbe:
+    initialDelaySeconds: 30
+    periodSeconds: 10
+
+kafkaTestData:
+  name: kafka-test-data
+  knowledgeFiles:
+    - simple-sample-test.dat
+    - simple-sample-test1.dat
+    - simple-sample-test2.dat
+
+kafkaTopicCreator:
+  name: dpn-kafka-topics-creator
+  backoffLimit: 5
+  image:
+    repository: <<GHCR IMAGE REGISTRY NAME>>/kafka-topic-creator
+    tag: "v2"
+    pullPolicy: Always
+  env:
+    BOOTSTRAP_VALUE: "dpn-kafka-src.ns-dpn-01.svc.cluster.local:9092"
+    KAFKA_TOPICS: "knowledge"
+
+kafkaTopicPopulator:
+  name: dpn-kafka-topics-populator
+  backoffLimit: 5
+  image:
+    repository: <<GHCR IMAGE REGISTRY NAME>>/kafka-topic-populator
+    tag: "v2"
+    pullPolicy: Always
+  env:
+    KAFKA_BROKER_SERVER: "dpn-kafka-src.ns-dpn-01.svc.cluster.local:9092"
+    KNOWLEDGE_TOPIC: "knowledge"
+    DATA_DELIMITER: "¬"
+  configMapRefs:
+    knowledgeDataConfigMap: "kafka-test-data"
+    knowledgeDataKey: "KNOWLEDGE_DATA"
+  volumeConfig:
+    name: "input-data"
+    configMapName: "kafka-input-data"
+    mountPath: "/tmp/input"
+
+federatorServer:
+  name: dpn-federator-server-1
+  replicaCount: 1
+  image:
+    repository: <<GHCR IMAGE REGISTRY NAME>>/dpn-federator-server
+    tag: ""
+    pullPolicy: Always
+  service:
+    type: ClusterIP
+    port: 50051
+    lbPort: 50051
+    # Internal NLB (default) — test-dpn01's internet-facing NLB + pinned EIP
+    # override does not apply here; see header note above. Revisit if dev
+    # needs the same external+pinned-IP setup (new EIPs would need to be
+    # allocated in <<your specific value>> first).
+    internalLoadBalancer: true
+  config:
+    # dev management-node domain — differs from test's <<your specific value>>
+    management_node_base_url: https://<<your specific value>>
+    kafkaBootstrapServers: dpn-kafka-src:9092
+    redisHost: dpn-redis
+    redisPort: 6379
+  # Overrides the base values.yaml default (/tls/truststore.p12), which doesn't exist in this
+  # environment (vaultConfig.mountCertFileShare=false below, so /tls is never mounted) - points
+  # instead at the dpn-tls truststore already mounted at /etc/secrets, which contains the
+  # dpn-root CA that actually signed dpn-redis's TLS certificate.
+  redis:
+    tlsEnabled: true
+    truststorePath: /etc/secrets/truststore.jks
+  idp:
+    # Confirmed real value via `kubectl get configmap
+    # federator-common-config-server -n ns-dpn-01` on the already-running
+    # dev-dpn01 cluster -- supersedes the earlier azure/dev-dpn01.yaml-derived
+    # guess (17b49eb6-...). Matches federatorClient's own clientId below.
+    clientId: <<your specific value>>
+    jwksUrl: https://<<your specific value>>/realms/management-node/protocol/openid-connect/certs
+    tokenUrl: https://<<your specific value>>/realms/management-node/protocol/openid-connect/token
+    tokenBackoff: 1000
+    truststorePath: /tls/truststore.p12
+    keystorePath: /tls/keystore.p12
+    authMode: "private_key_jwt"
+    jwtAlgorithm: "RS256"
+    jwtKeyAlias: "federator"
+  # NOTE: confirmed against app source — the server has no static
+  # storage-provider/bucket config to set at all (see federator-server-config.yaml).
+
+federatorClient:
+  name: dpn-federator-client-1
+  replicaCount: 1
+  tls:
+    gatewaySecretName: fed-gateway-tls
+  image:
+    repository: <<GHCR IMAGE REGISTRY NAME>>/dpn-federator-client
+    tag: ""
+    pullPolicy: Always
+  service:
+    grpcPort: 50052
+    jobRunnerPort: 8085
+    internalLoadBalancer: true
+
+  config:
+    management_node_base_url: https://<<your specific value>>
+    kafkaBootstrapServers: dpn-kafka-target:9092
+    redisHost: dpn-redis
+    redisPort: 6379
+    topicPrefix: federated-client1
+    targetTopic: dp-consumer-topic-stage
+    clientport: 50051
+
+  # Overrides the base values.yaml default (/tls/truststore.p12), which doesn't exist in this
+  # environment (vaultConfig.mountCertFileShare=false below, so /tls is never mounted) - points
+  # instead at the dpn-tls truststore already mounted at /etc/secrets, which contains the
+  # dpn-root CA that actually signed dpn-redis's TLS certificate.
+  redis:
+    tlsEnabled: true
+    truststorePath: /etc/secrets/truststore.jks
+
+  idp:
+    # Confirmed real value via `kubectl get configmap
+    # federator-common-config-client -n ns-dpn-01` on the already-running
+    # dev-dpn01 cluster -- supersedes the earlier azure/dev-dpn01.yaml-derived
+    # guess (17b49eb6-...).
+    clientId: <<your specific value>>
+    jwksUrl: https://<<your specific value>>/realms/management-node/protocol/openid-connect/certs
+    tokenUrl: https://<<your specific value>>/realms/management-node/protocol/openid-connect/token
+    tokenBackoff: 1000
+    truststorePath: /tls/truststore.p12
+    keystorePath: /tls/keystore.p12
+    authMode: "private_key_jwt"
+    jwtAlgorithm: "RS256"
+    jwtKeyAlias: "federator"
+  storage:
+    # provider value confirmed against app source (ReceivedFileStorageFactory):
+    # LOCAL | S3 | AZURE | GCP — NOT "AWS_S3".
+    provider: S3
+    tempDir: "/tmp/federator-files"
+    aws:
+      # Derived by the same naming formula as test's confirmed bucket
+      # ("dpn-<env>-<cluster#>-<account>-<region>-data") — NOT confirmed as
+      # actually provisioned for dev-dpn01 (see header note 4).
+      bucket: "<<your specific value>>"
+      region: "eu-west-2"
+
+# AWS: no AKV CSI mount needed — federator-server-secrets/federator-client-secrets
+# (Azure-only STORAGE_CONNECTION_STRING) are skipped entirely on cloudProvider=aws;
+# S3 credentials come from the pod's IAM role (IRSA) via the AWS SDK default
+# credential chain once IRSA is wired up for this chart (see header note #3).
+keyvault:
+  enabled: false
+
+# fileShare: unused — vaultConfig.mountCertFileShare=false below; TLS material comes from Vault.
+# fileShare:
+#   pvcName: pvc-dpn-certs-fileshare
+
+vaultConfig:
+  uri: https://vault-https.ns-dpn-01.svc.cluster.local:8200
+  truststorePath: /vault/truststore/truststore.jks
+  truststorePassword: ""
+  keystorePasswordPath: node-net/client/keystore-password#password
+  truststorePasswordPath: node-net/client/truststore-password#password
+  # --- Vault auth: AppRole. Reuses certificate-manager's own dev-dpn01 role_id
+  #     (same shared AppRole), confirmed as the established pattern on AWS
+  #     test-dpn01 (see that file's "RESOLVED 2026-09-18" note). ---
+  authMethod: approle
+  appRole:
+    roleId: "<<your specific value>>"
+    useSecretIdRef: true
+  # --- TLS material from Vault; SMB/EFS fileshare no longer mounted ---
+  tlsEnabled: true
+  tlsBasePath: node-net/client
+  tlsKeystoreAlias: federator
+  mountCertFileShare: false
+
+
+otel:
+  env:
+    OTEL_EXPORTER_OTLP_ENDPOINT: "http://dpn-otel-collector.ns-dpn-health-01.svc.cluster.local:4317"
+    OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
+    OTEL_EXPORTER_OTLP_INSECURE: "true"
