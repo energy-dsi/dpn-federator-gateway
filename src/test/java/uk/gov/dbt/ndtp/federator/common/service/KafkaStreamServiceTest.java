@@ -104,7 +104,14 @@ class KafkaStreamServiceTest {
     void test_hasConsumerAccessToTopic_trueWhenMatching() {
         KafkaStreamService cut = new KafkaStreamService(EMPTY_SHARED_HEADERS);
         ProducerConfigDTO cfg = buildConfig("dp1", "CLIENT-123", null);
-        assertTrue(invokeHasConsumerAccessToTopic(cut, "client-123", "dp1", cfg));
+        assertTrue(invokeHasConsumerAccessToTopic(cut, "CLIENT-123", "dp1", cfg));
+    }
+
+    @Test
+    void test_hasConsumerAccessToTopic_falseWhenClientIdCaseDiffers() {
+        KafkaStreamService cut = new KafkaStreamService(EMPTY_SHARED_HEADERS);
+        ProducerConfigDTO cfg = buildConfig("dp1", "CLIENT-123", null);
+        assertFalse(invokeHasConsumerAccessToTopic(cut, "client-123", "dp1", cfg));
     }
 
     @Test

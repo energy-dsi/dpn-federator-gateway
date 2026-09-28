@@ -112,7 +112,7 @@ public class ConsumerVerificationServerInterceptor implements ServerInterceptor 
         List<String> audiences = idpTokenService.extractAudiencesFromToken(token);
         String idpClientId = commonProperties.getProperty(IDP_CLIENT_ID);
         boolean audienceMatches = audiences != null
-                && audiences.stream().filter(Objects::nonNull).anyMatch(aud -> aud.equalsIgnoreCase(idpClientId));
+                && audiences.stream().filter(Objects::nonNull).anyMatch(aud -> aud.equals(idpClientId));
         if (!audienceMatches) {
             String message = "Token audience does not include required client id: " + idpClientId;
             log.error("JWT token Authentication failed: {} not present in token audiences={}", message, audiences);
@@ -144,7 +144,7 @@ public class ConsumerVerificationServerInterceptor implements ServerInterceptor 
      * - Only the first producer entry is considered (current business rule).
      * - If that first producer or its products list is null/empty, there are no authorised consumers (returns false).
      * - For all products under the first producer, the method flattens their consumer lists and checks whether any
-     *   consumer has an idpClientId matching the supplied consumerId (case-insensitive).
+     *   consumer has an idpClientId matching the supplied consumerId (case-sensitive).
      * - If at least one match is found, the consumer IS authorised (returns true).
      * - If no matches are found, the consumer is NOT authorised (returns false).
      * Null-safety:
@@ -152,7 +152,7 @@ public class ConsumerVerificationServerInterceptor implements ServerInterceptor 
      * - Null idpClientId values are ignored.
      *
      * @param producerConfiguration the configuration describing producers, products, and their authorised consumers
-     * @param consumerId the IDP client identifier extracted from the caller's token (case-insensitive match)
+     * @param consumerId the IDP client identifier extracted from the caller's token (case-sensitive match)
      * @return true if the consumer is authorised by the configuration; false otherwise
      */
     private boolean isConsumerAuthorized(ProducerConfigDTO producerConfiguration, String consumerId) {
@@ -170,6 +170,6 @@ public class ConsumerVerificationServerInterceptor implements ServerInterceptor 
                 .filter(product -> product != null && product.getConsumers() != null)
                 .flatMap(product -> product.getConsumers().stream())
                 .filter(consumer -> consumer != null && consumer.getIdpClientId() != null)
-                .anyMatch(consumer -> consumerId.equalsIgnoreCase(consumer.getIdpClientId()));
+                .anyMatch(consumer -> consumerId.equals(consumer.getIdpClientId()));
     }
 }
