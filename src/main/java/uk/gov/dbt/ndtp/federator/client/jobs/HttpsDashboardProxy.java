@@ -23,6 +23,7 @@ import java.time.Duration;
 import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Semaphore;
 import javax.net.ssl.KeyManager;
 import javax.net.ssl.SSLContext;
 import lombok.extern.slf4j.Slf4j;
@@ -51,10 +52,22 @@ public final class HttpsDashboardProxy {
     private static final Set<String> HOP_BY_HOP_RESPONSE_HEADERS =
             Set.of("connection", "keep-alive", "transfer-encoding", "content-length");
 
+    // A page load fires a burst of near-simultaneous asset/API requests, but com.sun.net.httpserver
+    // is HTTP/1.1 only, and browsers cap concurrent HTTP/1.1 connections to a single origin at ~6 -
+    // so that whole burst can land here at once. Throttling the browser's network bandwidth (which
+    // stops the burst arriving all at once, without changing how many requests there are) reliably
+    // avoided the resulting dashboard stall in testing; this gate reproduces that same staggering
+    // effect server-side so it doesn't depend on the client throttling itself. SSE requests are
+    // excluded - they're meant to stay open for as long as the browser tab does (see the timeout
+    // handling below), so holding a permit for their lifetime would starve every other request after
+    // just a couple of open dashboard tabs.
+    private static final int MAX_CONCURRENT_UPSTREAM_REQUESTS = 6;
+
     private final HttpsServer server;
     private final HttpClient client =
             HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
     private final String upstreamBaseUrl;
+    private final Semaphore upstreamConcurrencyGate = new Semaphore(MAX_CONCURRENT_UPSTREAM_REQUESTS);
 
     /**
      * Builds the proxy from a PKCS12/JKS keystore file on disk; delegates to the
@@ -105,7 +118,16 @@ public final class HttpsDashboardProxy {
     private final class ProxyHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange exchange) {
+            boolean isSse = exchange.getRequestURI().getPath().startsWith("/sse/");
+            boolean gateAcquired = false;
             try {
+                if (!isSse) {
+                    // Parks this virtual thread (not an OS thread) until a slot frees up, staggering
+                    // a page-load burst into the upstream instead of sending it all at once.
+                    upstreamConcurrencyGate.acquire();
+                    gateAcquired = true;
+                }
+
                 URI upstreamUri = URI.create(upstreamBaseUrl + exchange.getRequestURI());
                 HttpRequest.Builder builder = HttpRequest.newBuilder(upstreamUri);
                 // JobRunr's SSE endpoints stream events for as long as the browser tab stays open -
@@ -114,7 +136,7 @@ public final class HttpsDashboardProxy {
                 // forcibly cut every SSE connection at exactly 30s regardless of network health,
                 // tearing down the response being streamed back to the browser too ("Broken pipe").
                 // Every other request still gets the 30s safety net.
-                if (!exchange.getRequestURI().getPath().startsWith("/sse/")) {
+                if (!isSse) {
                     builder.timeout(Duration.ofSeconds(30));
                 }
 
@@ -180,6 +202,9 @@ public final class HttpsDashboardProxy {
                     // Best effort - connection may already be broken.
                 }
             } finally {
+                if (gateAcquired) {
+                    upstreamConcurrencyGate.release();
+                }
                 exchange.close();
             }
         }
