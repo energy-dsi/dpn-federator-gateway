@@ -27,7 +27,6 @@ import javax.net.ssl.KeyManager;
 import javax.net.ssl.SSLContext;
 import lombok.extern.slf4j.Slf4j;
 import uk.gov.dbt.ndtp.federator.common.utils.SSLUtils;
-import uk.gov.dbt.ndtp.federator.common.utils.StallGuardedCopy;
 
 /**
  * Minimal HTTPS reverse proxy that terminates TLS in front of JobRunr's embedded dashboard.
@@ -159,10 +158,14 @@ public final class HttpsDashboardProxy {
                 try (InputStream in = response.body()) {
                     if (!noBody) {
                         try (OutputStream out = exchange.getResponseBody()) {
-                            // Unlike builder.timeout() above, this also covers SSE paths: SSE is
-                            // expected to sit idle between events, but never idle for minutes with
-                            // zero bytes - see StallGuardedCopy.
-                            StallGuardedCopy.copy(in, out, Duration.ofSeconds(60), true);
+                            byte[] buf = new byte[8192];
+                            int n;
+                            while ((n = in.read(buf)) != -1) {
+                                out.write(buf, 0, n);
+                                // Flush each read so tiny SSE events reach the browser immediately
+                                // instead of sitting in the chunked-output buffer until it fills.
+                                out.flush();
+                            }
                         }
                     }
                 }

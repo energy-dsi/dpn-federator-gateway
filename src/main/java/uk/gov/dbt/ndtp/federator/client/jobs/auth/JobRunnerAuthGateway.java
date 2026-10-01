@@ -23,7 +23,6 @@ import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import lombok.extern.slf4j.Slf4j;
-import uk.gov.dbt.ndtp.federator.common.utils.StallGuardedCopy;
 
 /**
  * Authenticating reverse proxy placed in front of the JobRunr dashboard (Job Runner UI).
@@ -272,9 +271,7 @@ public class JobRunnerAuthGateway {
         exchange.sendResponseHeaders(upstreamResponse.statusCode(), 0);
         try (InputStream upstreamBody = upstreamResponse.body();
                 OutputStream clientOut = exchange.getResponseBody()) {
-            // Unlike requestBuilder.timeout() above, this also covers SSE paths: SSE is expected to sit
-            // idle between events, but never idle for minutes with zero bytes - see StallGuardedCopy.
-            StallGuardedCopy.copy(upstreamBody, clientOut, Duration.ofSeconds(60), false);
+            upstreamBody.transferTo(clientOut);
         }
     }
 
