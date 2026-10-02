@@ -45,6 +45,17 @@ public class JobRunnerAuthGateway {
     private static final Set<String> HOP_BY_HOP_RESPONSE_HEADERS =
             Set.of("connection", "content-length", "keep-alive", "transfer-encoding");
 
+    // Regular (non-SSE) responses: 60s with zero bytes is already well past any legitimate response
+    // time and indicates a genuinely stuck upstream.
+    private static final Duration STALL_TIMEOUT = Duration.ofSeconds(60);
+
+    // SSE responses push data only when something actually changes, so multi-minute gaps with zero
+    // bytes are normal, not a stall - a flat 60s timeout here was firing on every idle dashboard
+    // every ~60-90s, making the browser's EventSource auto-reconnect in a loop (see the identical
+    // fix/comment in HttpsDashboardProxy, the other hop in this chain). Still a safety net against a
+    // truly dead connection, just a much more tolerant one.
+    private static final Duration SSE_STALL_TIMEOUT = Duration.ofMinutes(10);
+
     // Non-sensitive static assets the dashboard's own HTML references (e.g. the PWA manifest
     // linked from <head>) that the browser may fetch before - or without ever completing - a
     // login. These are proxied straight through with no auth check at all: unlike the rest of
@@ -250,12 +261,13 @@ public class JobRunnerAuthGateway {
 
     private void proxy(HttpExchange exchange) throws IOException, InterruptedException {
         URI targetUri = upstreamBaseUri.resolve(exchange.getRequestURI());
+        boolean isSse = exchange.getRequestURI().getPath().startsWith("/sse/");
 
         HttpRequest.Builder requestBuilder = HttpRequest.newBuilder(targetUri);
         // JobRunr's SSE endpoints stream events for as long as the browser tab stays open, so a
         // blanket 30s timeout here would forcibly cut the connection regardless of network health
         // (see the identical fix/comment in HttpsDashboardProxy, the other hop in this chain).
-        if (!exchange.getRequestURI().getPath().startsWith("/sse/")) {
+        if (!isSse) {
             requestBuilder.timeout(Duration.ofSeconds(30));
         }
         copyRequestHeaders(exchange, requestBuilder);
@@ -272,9 +284,10 @@ public class JobRunnerAuthGateway {
         exchange.sendResponseHeaders(upstreamResponse.statusCode(), 0);
         try (InputStream upstreamBody = upstreamResponse.body();
                 OutputStream clientOut = exchange.getResponseBody()) {
-            // Unlike requestBuilder.timeout() above, this also covers SSE paths: SSE is expected to sit
-            // idle between events, but never idle for minutes with zero bytes - see StallGuardedCopy.
-            StallGuardedCopy.copy(upstreamBody, clientOut, Duration.ofSeconds(60), false);
+            // Unlike requestBuilder.timeout() above, this also covers SSE paths: SSE needs a far more
+            // tolerant timeout than regular requests (see SSE_STALL_TIMEOUT) since idling for minutes
+            // with zero bytes is normal for it, not a stall.
+            StallGuardedCopy.copy(upstreamBody, clientOut, isSse ? SSE_STALL_TIMEOUT : STALL_TIMEOUT, false);
         }
     }
 

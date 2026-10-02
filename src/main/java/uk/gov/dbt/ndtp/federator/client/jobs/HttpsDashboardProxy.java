@@ -72,6 +72,17 @@ public final class HttpsDashboardProxy {
     // normal page-load burst drain through without spurious 503s.
     private static final Duration GATE_WAIT_TIMEOUT = Duration.ofSeconds(20);
 
+    // Regular (non-SSE) responses: 60s with zero bytes is already well past any legitimate response
+    // time and indicates a genuinely stuck upstream.
+    private static final Duration STALL_TIMEOUT = Duration.ofSeconds(60);
+
+    // SSE responses push data only when something actually changes (job counts, server heartbeats),
+    // so multi-minute gaps with zero bytes are normal, not a stall - a 60s timeout here was firing
+    // on every idle dashboard every ~60-90s, which made the browser's EventSource auto-reconnect in
+    // a loop (see the "Broken pipe" / repeated stall warnings this produced in production logs).
+    // This is still a safety net against a truly dead connection, just a much more tolerant one.
+    private static final Duration SSE_STALL_TIMEOUT = Duration.ofMinutes(10);
+
     private final HttpsServer server;
     private final HttpClient client =
             HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
@@ -199,12 +210,13 @@ public final class HttpsDashboardProxy {
                 try (InputStream in = response.body()) {
                     if (!noBody) {
                         try (OutputStream out = exchange.getResponseBody()) {
-                            // Unlike builder.timeout() above, this also covers SSE paths: SSE is
-                            // expected to sit idle between events, but never idle for minutes with
-                            // zero bytes - see StallGuardedCopy. This also guarantees the gate permit
-                            // acquired above is released within a bounded time even if the upstream
-                            // genuinely stalls, instead of being held forever.
-                            StallGuardedCopy.copy(in, out, Duration.ofSeconds(60), true);
+                            // Unlike builder.timeout() above, this also covers SSE paths: SSE needs
+                            // a far more tolerant timeout than regular requests (see SSE_STALL_TIMEOUT)
+                            // since idling for minutes with zero bytes is normal for it, not a stall.
+                            // This also guarantees the gate permit acquired above is released within a
+                            // bounded time even if the upstream genuinely stalls, instead of being held
+                            // forever.
+                            StallGuardedCopy.copy(in, out, isSse ? SSE_STALL_TIMEOUT : STALL_TIMEOUT, true);
                         }
                     }
                 }
