@@ -83,7 +83,6 @@ public class JobRunnerAuthGateway {
 
     private HttpServer httpServer;
     private ExecutorService executorService;
-    private HttpClient httpClient;
 
     public JobRunnerAuthGateway(int publicPort, JobRunnerAuthProperties config, BearerTokenVerifier verifier) {
         this(publicPort, config, verifier, null);
@@ -101,7 +100,6 @@ public class JobRunnerAuthGateway {
     public void start() {
         try {
             executorService = Executors.newCachedThreadPool();
-            httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
 
             httpServer = HttpServer.create(new InetSocketAddress(publicPort), 0);
             httpServer.setExecutor(executorService);
@@ -277,17 +275,28 @@ public class JobRunnerAuthGateway {
                 requestBody.length == 0 ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofByteArray(requestBody);
         requestBuilder.method(exchange.getRequestMethod(), bodyPublisher);
 
-        HttpResponse<InputStream> upstreamResponse =
-                httpClient.send(requestBuilder.build(), HttpResponse.BodyHandlers.ofInputStream());
+        // A dedicated, single-use client per request - rather than one HttpClient instance shared
+        // across every concurrent request - sidesteps a known class of JDK HttpClient issue where a
+        // pooled/reused HTTP/1.1 connection under concurrent load can leave
+        // HttpResponseInputStream.read() blocked forever waiting for bytes the connection's internal
+        // state machine never delivers, even though the upstream already finished responding (this
+        // matched every stall seen in production thread dumps exactly - see the identical fix in
+        // HttpsDashboardProxy, the other hop in this chain). close() blocks until any in-flight
+        // exchange on this client finishes, which is a no-op here since the body is always fully
+        // read before this block exits.
+        try (HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build()) {
+            HttpResponse<InputStream> upstreamResponse =
+                    client.send(requestBuilder.build(), HttpResponse.BodyHandlers.ofInputStream());
 
-        copyResponseHeaders(exchange, upstreamResponse);
-        exchange.sendResponseHeaders(upstreamResponse.statusCode(), 0);
-        try (InputStream upstreamBody = upstreamResponse.body();
-                OutputStream clientOut = exchange.getResponseBody()) {
-            // Unlike requestBuilder.timeout() above, this also covers SSE paths: SSE needs a far more
-            // tolerant timeout than regular requests (see SSE_STALL_TIMEOUT) since idling for minutes
-            // with zero bytes is normal for it, not a stall.
-            StallGuardedCopy.copy(upstreamBody, clientOut, isSse ? SSE_STALL_TIMEOUT : STALL_TIMEOUT, false);
+            copyResponseHeaders(exchange, upstreamResponse);
+            exchange.sendResponseHeaders(upstreamResponse.statusCode(), 0);
+            try (InputStream upstreamBody = upstreamResponse.body();
+                    OutputStream clientOut = exchange.getResponseBody()) {
+                // Unlike requestBuilder.timeout() above, this also covers SSE paths: SSE needs a far
+                // more tolerant timeout than regular requests (see SSE_STALL_TIMEOUT) since idling for
+                // minutes with zero bytes is normal for it, not a stall.
+                StallGuardedCopy.copy(upstreamBody, clientOut, isSse ? SSE_STALL_TIMEOUT : STALL_TIMEOUT, false);
+            }
         }
     }
 

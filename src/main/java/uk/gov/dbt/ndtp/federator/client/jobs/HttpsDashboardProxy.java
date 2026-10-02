@@ -23,8 +23,6 @@ import java.time.Duration;
 import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.Executors;
-import java.util.concurrent.Semaphore;
-import java.util.concurrent.TimeUnit;
 import javax.net.ssl.KeyManager;
 import javax.net.ssl.SSLContext;
 import lombok.extern.slf4j.Slf4j;
@@ -54,24 +52,6 @@ public final class HttpsDashboardProxy {
     private static final Set<String> HOP_BY_HOP_RESPONSE_HEADERS =
             Set.of("connection", "keep-alive", "transfer-encoding", "content-length");
 
-    // A page load fires a burst of near-simultaneous asset/API requests, but com.sun.net.httpserver
-    // is HTTP/1.1 only, and browsers cap concurrent HTTP/1.1 connections to a single origin at ~6 -
-    // so that whole burst can land here at once. Throttling the browser's network bandwidth (which
-    // stops the burst arriving all at once, without changing how many requests there are) reliably
-    // avoided the resulting dashboard stall in testing; this gate reproduces that same staggering
-    // effect server-side so it doesn't depend on the client throttling itself. SSE requests are
-    // excluded - they're meant to stay open for as long as the browser tab does (see the timeout
-    // handling below), so holding a permit for their lifetime would starve every other request after
-    // just a couple of open dashboard tabs.
-    private static final int MAX_CONCURRENT_UPSTREAM_REQUESTS = 6;
-
-    // How long a request will wait for a gate slot before giving up with a 503. Without this bound,
-    // a request would wait forever behind in-flight requests that might themselves be genuinely
-    // stalled upstream - StallGuardedCopy below caps how long any single slot can be held (60s), so
-    // waiting comfortably longer than that one worst case, rather than indefinitely, still lets a
-    // normal page-load burst drain through without spurious 503s.
-    private static final Duration GATE_WAIT_TIMEOUT = Duration.ofSeconds(20);
-
     // Regular (non-SSE) responses: 60s with zero bytes is already well past any legitimate response
     // time and indicates a genuinely stuck upstream.
     private static final Duration STALL_TIMEOUT = Duration.ofSeconds(60);
@@ -84,10 +64,7 @@ public final class HttpsDashboardProxy {
     private static final Duration SSE_STALL_TIMEOUT = Duration.ofMinutes(10);
 
     private final HttpsServer server;
-    private final HttpClient client =
-            HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
     private final String upstreamBaseUrl;
-    private final Semaphore upstreamConcurrencyGate = new Semaphore(MAX_CONCURRENT_UPSTREAM_REQUESTS);
 
     /**
      * Builds the proxy from a PKCS12/JKS keystore file on disk; delegates to the
@@ -139,25 +116,7 @@ public final class HttpsDashboardProxy {
         @Override
         public void handle(HttpExchange exchange) {
             boolean isSse = exchange.getRequestURI().getPath().startsWith("/sse/");
-            boolean gateAcquired = false;
             try {
-                if (!isSse) {
-                    // Parks this virtual thread (not an OS thread) until a slot frees up, staggering
-                    // a page-load burst into the upstream instead of sending it all at once - but
-                    // only up to GATE_WAIT_TIMEOUT, so a request doesn't itself hang forever if every
-                    // slot happens to be held right now.
-                    gateAcquired = upstreamConcurrencyGate.tryAcquire(
-                            GATE_WAIT_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
-                    if (!gateAcquired) {
-                        log.warn(
-                                "Dashboard proxy busy - no upstream slot freed up within {} for {}",
-                                GATE_WAIT_TIMEOUT,
-                                exchange.getRequestURI());
-                        exchange.sendResponseHeaders(503, -1);
-                        return;
-                    }
-                }
-
                 URI upstreamUri = URI.create(upstreamBaseUrl + exchange.getRequestURI());
                 HttpRequest.Builder builder = HttpRequest.newBuilder(upstreamUri);
                 // JobRunr's SSE endpoints stream events for as long as the browser tab stays open -
@@ -190,33 +149,42 @@ public final class HttpsDashboardProxy {
                                 ? BodyPublishers.ofInputStream(exchange::getRequestBody)
                                 : BodyPublishers.noBody());
 
-                HttpResponse<InputStream> response = client.send(builder.build(), BodyHandlers.ofInputStream());
+                // A dedicated, single-use client per request - rather than one HttpClient instance
+                // shared across every concurrent request - sidesteps a known class of JDK HttpClient
+                // issue where a pooled/reused HTTP/1.1 connection under concurrent load can leave
+                // HttpResponseInputStream.read() blocked forever waiting for bytes the connection's
+                // internal state machine never delivers, even though the upstream already finished
+                // responding (this matched every stall seen in production thread dumps exactly).
+                // close() blocks until any in-flight exchange on this client finishes, which is a
+                // no-op here since the body is always fully read before this block exits.
+                try (HttpClient client =
+                        HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build()) {
+                    HttpResponse<InputStream> response =
+                            client.send(builder.build(), BodyHandlers.ofInputStream());
 
-                response.headers().map().forEach((name, values) -> {
-                    if (!HOP_BY_HOP_RESPONSE_HEADERS.contains(name.toLowerCase(Locale.ROOT))) {
-                        exchange.getResponseHeaders().put(name, values);
-                    }
-                });
+                    response.headers().map().forEach((name, values) -> {
+                        if (!HOP_BY_HOP_RESPONSE_HEADERS.contains(name.toLowerCase(Locale.ROOT))) {
+                            exchange.getResponseHeaders().put(name, values);
+                        }
+                    });
 
-                int status = response.statusCode();
-                // 204 (No Content) and 304 (Not Modified) forbid a response body, as does any
-                // response to a HEAD request. For those, -1 sends headers only; passing 0 would
-                // select chunked encoding and emit an (illegal) body, which the JDK server rejects.
-                // JobRunr's dashboard returns 204 on job/recurring-job deletes.
-                boolean noBody = status == 204 || status == 304 || "HEAD".equalsIgnoreCase(method);
-                // 0 = chunked transfer encoding; response length is unknown up front and this also
-                // lets SSE responses stream through as they're written rather than being buffered.
-                exchange.sendResponseHeaders(status, noBody ? -1 : 0);
-                try (InputStream in = response.body()) {
-                    if (!noBody) {
-                        try (OutputStream out = exchange.getResponseBody()) {
-                            // Unlike builder.timeout() above, this also covers SSE paths: SSE needs
-                            // a far more tolerant timeout than regular requests (see SSE_STALL_TIMEOUT)
-                            // since idling for minutes with zero bytes is normal for it, not a stall.
-                            // This also guarantees the gate permit acquired above is released within a
-                            // bounded time even if the upstream genuinely stalls, instead of being held
-                            // forever.
-                            StallGuardedCopy.copy(in, out, isSse ? SSE_STALL_TIMEOUT : STALL_TIMEOUT, true);
+                    int status = response.statusCode();
+                    // 204 (No Content) and 304 (Not Modified) forbid a response body, as does any
+                    // response to a HEAD request. For those, -1 sends headers only; passing 0 would
+                    // select chunked encoding and emit an (illegal) body, which the JDK server rejects.
+                    // JobRunr's dashboard returns 204 on job/recurring-job deletes.
+                    boolean noBody = status == 204 || status == 304 || "HEAD".equalsIgnoreCase(method);
+                    // 0 = chunked transfer encoding; response length is unknown up front and this also
+                    // lets SSE responses stream through as they're written rather than being buffered.
+                    exchange.sendResponseHeaders(status, noBody ? -1 : 0);
+                    try (InputStream in = response.body()) {
+                        if (!noBody) {
+                            try (OutputStream out = exchange.getResponseBody()) {
+                                // Unlike builder.timeout() above, this also covers SSE paths: SSE needs
+                                // a far more tolerant timeout than regular requests (see SSE_STALL_TIMEOUT)
+                                // since idling for minutes with zero bytes is normal for it, not a stall.
+                                StallGuardedCopy.copy(in, out, isSse ? SSE_STALL_TIMEOUT : STALL_TIMEOUT, true);
+                            }
                         }
                     }
                 }
@@ -231,9 +199,6 @@ public final class HttpsDashboardProxy {
                     // Best effort - connection may already be broken.
                 }
             } finally {
-                if (gateAcquired) {
-                    upstreamConcurrencyGate.release();
-                }
                 exchange.close();
             }
         }
