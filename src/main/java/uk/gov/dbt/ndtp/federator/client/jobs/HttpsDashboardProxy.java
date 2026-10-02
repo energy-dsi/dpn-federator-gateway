@@ -24,10 +24,12 @@ import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
 import javax.net.ssl.KeyManager;
 import javax.net.ssl.SSLContext;
 import lombok.extern.slf4j.Slf4j;
 import uk.gov.dbt.ndtp.federator.common.utils.SSLUtils;
+import uk.gov.dbt.ndtp.federator.common.utils.StallGuardedCopy;
 
 /**
  * Minimal HTTPS reverse proxy that terminates TLS in front of JobRunr's embedded dashboard.
@@ -62,6 +64,13 @@ public final class HttpsDashboardProxy {
     // handling below), so holding a permit for their lifetime would starve every other request after
     // just a couple of open dashboard tabs.
     private static final int MAX_CONCURRENT_UPSTREAM_REQUESTS = 6;
+
+    // How long a request will wait for a gate slot before giving up with a 503. Without this bound,
+    // a request would wait forever behind in-flight requests that might themselves be genuinely
+    // stalled upstream - StallGuardedCopy below caps how long any single slot can be held (60s), so
+    // waiting comfortably longer than that one worst case, rather than indefinitely, still lets a
+    // normal page-load burst drain through without spurious 503s.
+    private static final Duration GATE_WAIT_TIMEOUT = Duration.ofSeconds(20);
 
     private final HttpsServer server;
     private final HttpClient client =
@@ -123,9 +132,19 @@ public final class HttpsDashboardProxy {
             try {
                 if (!isSse) {
                     // Parks this virtual thread (not an OS thread) until a slot frees up, staggering
-                    // a page-load burst into the upstream instead of sending it all at once.
-                    upstreamConcurrencyGate.acquire();
-                    gateAcquired = true;
+                    // a page-load burst into the upstream instead of sending it all at once - but
+                    // only up to GATE_WAIT_TIMEOUT, so a request doesn't itself hang forever if every
+                    // slot happens to be held right now.
+                    gateAcquired = upstreamConcurrencyGate.tryAcquire(
+                            GATE_WAIT_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+                    if (!gateAcquired) {
+                        log.warn(
+                                "Dashboard proxy busy - no upstream slot freed up within {} for {}",
+                                GATE_WAIT_TIMEOUT,
+                                exchange.getRequestURI());
+                        exchange.sendResponseHeaders(503, -1);
+                        return;
+                    }
                 }
 
                 URI upstreamUri = URI.create(upstreamBaseUrl + exchange.getRequestURI());
@@ -180,14 +199,12 @@ public final class HttpsDashboardProxy {
                 try (InputStream in = response.body()) {
                     if (!noBody) {
                         try (OutputStream out = exchange.getResponseBody()) {
-                            byte[] buf = new byte[8192];
-                            int n;
-                            while ((n = in.read(buf)) != -1) {
-                                out.write(buf, 0, n);
-                                // Flush each read so tiny SSE events reach the browser immediately
-                                // instead of sitting in the chunked-output buffer until it fills.
-                                out.flush();
-                            }
+                            // Unlike builder.timeout() above, this also covers SSE paths: SSE is
+                            // expected to sit idle between events, but never idle for minutes with
+                            // zero bytes - see StallGuardedCopy. This also guarantees the gate permit
+                            // acquired above is released within a bounded time even if the upstream
+                            // genuinely stalls, instead of being held forever.
+                            StallGuardedCopy.copy(in, out, Duration.ofSeconds(60), true);
                         }
                     }
                 }
