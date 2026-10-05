@@ -23,6 +23,7 @@ import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import lombok.extern.slf4j.Slf4j;
+import uk.gov.dbt.ndtp.federator.common.utils.StallGuardedCopy;
 
 /**
  * Authenticating reverse proxy placed in front of the JobRunr dashboard (Job Runner UI).
@@ -44,6 +45,17 @@ public class JobRunnerAuthGateway {
     private static final Set<String> HOP_BY_HOP_RESPONSE_HEADERS =
             Set.of("connection", "content-length", "keep-alive", "transfer-encoding");
 
+    // Regular (non-SSE) responses: 60s with zero bytes is already well past any legitimate response
+    // time and indicates a genuinely stuck upstream.
+    private static final Duration STALL_TIMEOUT = Duration.ofSeconds(60);
+
+    // SSE responses push data only when something actually changes, so multi-minute gaps with zero
+    // bytes are normal, not a stall - a flat 60s timeout here was firing on every idle dashboard
+    // every ~60-90s, making the browser's EventSource auto-reconnect in a loop (see the identical
+    // fix/comment in HttpsDashboardProxy, the other hop in this chain). Still a safety net against a
+    // truly dead connection, just a much more tolerant one.
+    private static final Duration SSE_STALL_TIMEOUT = Duration.ofMinutes(10);
+
     // Non-sensitive static assets the dashboard's own HTML references (e.g. the PWA manifest
     // linked from <head>) that the browser may fetch before - or without ever completing - a
     // login. These are proxied straight through with no auth check at all: unlike the rest of
@@ -60,6 +72,17 @@ public class JobRunnerAuthGateway {
     // preserving today's behaviour for that case rather than risking blocking a real page load.
     private static final String SEC_FETCH_MODE_HEADER = "Sec-Fetch-Mode";
     private static final String SEC_FETCH_MODE_NAVIGATE = "navigate";
+
+    // Path for the lightweight check verify() serves - see its javadoc. Must match the
+    // nginx sidecar's auth_request target (federator-client-nginx-config.yaml).
+    private static final String VERIFY_PATH = "/verify";
+
+    // Header the nginx sidecar sets on its /verify subrequest carrying the ORIGINAL request's
+    // method, since nginx's auth_request directive always issues the subrequest as a bodiless
+    // GET regardless of what the real request was - without this, every mutating action (which
+    // needs ADMIN, checked via HTTP method below) would be wrongly evaluated as a GET/READER
+    // request. See federator-client-nginx-config.yaml.
+    private static final String ORIGINAL_METHOD_HEADER = "X-Original-Method";
 
     private final int publicPort;
     private final JobRunnerAuthProperties config;
@@ -94,6 +117,9 @@ public class JobRunnerAuthGateway {
             httpServer = HttpServer.create(new InetSocketAddress(publicPort), 0);
             httpServer.setExecutor(executorService);
             httpServer.createContext("/", this::handle);
+            // Longest-prefix match means this takes precedence over "/" for exactly this path -
+            // see verify() for why it exists alongside handle().
+            httpServer.createContext(VERIFY_PATH, this::verify);
             httpServer.start();
 
             log.info(
@@ -211,6 +237,64 @@ public class JobRunnerAuthGateway {
     }
 
     /**
+     * Lightweight, read-only authorization check used by the nginx sidecar's {@code auth_request}
+     * directive (see federator-client-nginx-config.yaml). Answers "is the token on this request
+     * currently valid" with no body and no side effects - deliberately NOT attempting the silent
+     * refresh {@link #handle} does (that needs to mutate cookies on the real response, which an
+     * auth_request subrequest can't cleanly do for Keycloak's two Set-Cookie headers), so repeated
+     * calls on every request in a page-load burst stay cheap.
+     * <p>
+     * On a 200 here, nginx proxies the request straight to JobRunr's dashboard, bypassing this
+     * gateway's own {@link #proxy} entirely. On anything else (401/403, including an expired
+     * token that needs the full refresh-or-redirect flow {@link #handle} performs), nginx falls
+     * back to this gateway's normal "/" handling unchanged. That split is the point: this
+     * gateway's own {@code com.sun.net.httpserver} instance previously had to proxy every single
+     * request in a page-load burst (dozens of near-simultaneous asset/API/SSE requests) and could
+     * not keep up, repeatedly stalling - see the bounded-concurrency and stall-guard history on
+     * this class and {@code HttpsDashboardProxy}. With this split, that burst almost always has a
+     * currently-valid session (the common case) and never reaches this gateway's HTTP server at
+     * all; this gateway now only sees the rare, genuinely low-traffic cases (initial login, token
+     * refresh, OIDC callback).
+     */
+    private void verify(HttpExchange exchange) {
+        try {
+            String headerToken = extractToken(firstHeader(exchange.getRequestHeaders(), config.getHeaderName()));
+            String token = headerToken != null
+                    ? headerToken
+                    : (oidcLoginFlow != null ? OidcLoginFlow.readCookie(exchange, config.getOidcCookieName()) : null);
+
+            AuthResult authResult = verifier.verify(token);
+            if (!authResult.authorized()) {
+                exchange.sendResponseHeaders(401, -1);
+                return;
+            }
+
+            String method = firstHeader(exchange.getRequestHeaders(), ORIGINAL_METHOD_HEADER);
+            if (method == null) {
+                method = exchange.getRequestMethod();
+            }
+            AccessLevel requiredLevel = READ_ONLY_HTTP_METHODS.contains(method.toUpperCase(Locale.ROOT))
+                    ? AccessLevel.READER
+                    : AccessLevel.ADMIN;
+            if (authResult.accessLevel().ordinal() < requiredLevel.ordinal()) {
+                exchange.sendResponseHeaders(403, -1);
+                return;
+            }
+
+            exchange.sendResponseHeaders(200, -1);
+        } catch (Exception e) {
+            log.error("Auth verify check failed", e);
+            try {
+                exchange.sendResponseHeaders(401, -1);
+            } catch (IOException ignored) {
+                // Best effort - connection may already be broken.
+            }
+        } finally {
+            exchange.close();
+        }
+    }
+
+    /**
      * True for non-sensitive static assets (see {@link #PUBLIC_ASSET_SUFFIXES}) that should be
      * served without any auth check at all, regardless of browser or request mode.
      */
@@ -249,12 +333,13 @@ public class JobRunnerAuthGateway {
 
     private void proxy(HttpExchange exchange) throws IOException, InterruptedException {
         URI targetUri = upstreamBaseUri.resolve(exchange.getRequestURI());
+        boolean isSse = exchange.getRequestURI().getPath().startsWith("/sse/");
 
         HttpRequest.Builder requestBuilder = HttpRequest.newBuilder(targetUri);
         // JobRunr's SSE endpoints stream events for as long as the browser tab stays open, so a
         // blanket 30s timeout here would forcibly cut the connection regardless of network health
         // (see the identical fix/comment in HttpsDashboardProxy, the other hop in this chain).
-        if (!exchange.getRequestURI().getPath().startsWith("/sse/")) {
+        if (!isSse) {
             requestBuilder.timeout(Duration.ofSeconds(30));
         }
         copyRequestHeaders(exchange, requestBuilder);
@@ -271,7 +356,10 @@ public class JobRunnerAuthGateway {
         exchange.sendResponseHeaders(upstreamResponse.statusCode(), 0);
         try (InputStream upstreamBody = upstreamResponse.body();
                 OutputStream clientOut = exchange.getResponseBody()) {
-            upstreamBody.transferTo(clientOut);
+            // Unlike requestBuilder.timeout() above, this also covers SSE paths: SSE needs a far more
+            // tolerant timeout than regular requests (see SSE_STALL_TIMEOUT) since idling for minutes
+            // with zero bytes is normal for it, not a stall.
+            StallGuardedCopy.copy(upstreamBody, clientOut, isSse ? SSE_STALL_TIMEOUT : STALL_TIMEOUT, false);
         }
     }
 

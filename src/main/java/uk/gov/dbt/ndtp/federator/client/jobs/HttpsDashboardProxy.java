@@ -23,10 +23,13 @@ import java.time.Duration;
 import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
 import javax.net.ssl.KeyManager;
 import javax.net.ssl.SSLContext;
 import lombok.extern.slf4j.Slf4j;
 import uk.gov.dbt.ndtp.federator.common.utils.SSLUtils;
+import uk.gov.dbt.ndtp.federator.common.utils.StallGuardedCopy;
 
 /**
  * Minimal HTTPS reverse proxy that terminates TLS in front of JobRunr's embedded dashboard.
@@ -51,10 +54,40 @@ public final class HttpsDashboardProxy {
     private static final Set<String> HOP_BY_HOP_RESPONSE_HEADERS =
             Set.of("connection", "keep-alive", "transfer-encoding", "content-length");
 
+    // A page load fires a burst of near-simultaneous asset/API requests, but com.sun.net.httpserver
+    // is HTTP/1.1 only, and browsers cap concurrent HTTP/1.1 connections to a single origin at ~6 -
+    // so that whole burst can land here at once. Throttling the browser's network bandwidth (which
+    // stops the burst arriving all at once, without changing how many requests there are) reliably
+    // avoided the resulting dashboard stall in testing; this gate reproduces that same staggering
+    // effect server-side so it doesn't depend on the client throttling itself. SSE requests are
+    // excluded - they're meant to stay open for as long as the browser tab does (see the timeout
+    // handling below), so holding a permit for their lifetime would starve every other request after
+    // just a couple of open dashboard tabs.
+    private static final int MAX_CONCURRENT_UPSTREAM_REQUESTS = 6;
+
+    // How long a request will wait for a gate slot before giving up with a 503. Without this bound,
+    // a request would wait forever behind in-flight requests that might themselves be genuinely
+    // stalled upstream - StallGuardedCopy below caps how long any single slot can be held (60s), so
+    // waiting comfortably longer than that one worst case, rather than indefinitely, still lets a
+    // normal page-load burst drain through without spurious 503s.
+    private static final Duration GATE_WAIT_TIMEOUT = Duration.ofSeconds(20);
+
+    // Regular (non-SSE) responses: 60s with zero bytes is already well past any legitimate response
+    // time and indicates a genuinely stuck upstream.
+    private static final Duration STALL_TIMEOUT = Duration.ofSeconds(60);
+
+    // SSE responses push data only when something actually changes (job counts, server heartbeats),
+    // so multi-minute gaps with zero bytes are normal, not a stall - a 60s timeout here was firing
+    // on every idle dashboard every ~60-90s, which made the browser's EventSource auto-reconnect in
+    // a loop (see the "Broken pipe" / repeated stall warnings this produced in production logs).
+    // This is still a safety net against a truly dead connection, just a much more tolerant one.
+    private static final Duration SSE_STALL_TIMEOUT = Duration.ofMinutes(10);
+
     private final HttpsServer server;
     private final HttpClient client =
             HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
     private final String upstreamBaseUrl;
+    private final Semaphore upstreamConcurrencyGate = new Semaphore(MAX_CONCURRENT_UPSTREAM_REQUESTS);
 
     /**
      * Builds the proxy from a PKCS12/JKS keystore file on disk; delegates to the
@@ -105,7 +138,26 @@ public final class HttpsDashboardProxy {
     private final class ProxyHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange exchange) {
+            boolean isSse = exchange.getRequestURI().getPath().startsWith("/sse/");
+            boolean gateAcquired = false;
             try {
+                if (!isSse) {
+                    // Parks this virtual thread (not an OS thread) until a slot frees up, staggering
+                    // a page-load burst into the upstream instead of sending it all at once - but
+                    // only up to GATE_WAIT_TIMEOUT, so a request doesn't itself hang forever if every
+                    // slot happens to be held right now.
+                    gateAcquired = upstreamConcurrencyGate.tryAcquire(
+                            GATE_WAIT_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+                    if (!gateAcquired) {
+                        log.warn(
+                                "Dashboard proxy busy - no upstream slot freed up within {} for {}",
+                                GATE_WAIT_TIMEOUT,
+                                exchange.getRequestURI());
+                        exchange.sendResponseHeaders(503, -1);
+                        return;
+                    }
+                }
+
                 URI upstreamUri = URI.create(upstreamBaseUrl + exchange.getRequestURI());
                 HttpRequest.Builder builder = HttpRequest.newBuilder(upstreamUri);
                 // JobRunr's SSE endpoints stream events for as long as the browser tab stays open -
@@ -114,7 +166,7 @@ public final class HttpsDashboardProxy {
                 // forcibly cut every SSE connection at exactly 30s regardless of network health,
                 // tearing down the response being streamed back to the browser too ("Broken pipe").
                 // Every other request still gets the 30s safety net.
-                if (!exchange.getRequestURI().getPath().startsWith("/sse/")) {
+                if (!isSse) {
                     builder.timeout(Duration.ofSeconds(30));
                 }
 
@@ -158,14 +210,13 @@ public final class HttpsDashboardProxy {
                 try (InputStream in = response.body()) {
                     if (!noBody) {
                         try (OutputStream out = exchange.getResponseBody()) {
-                            byte[] buf = new byte[8192];
-                            int n;
-                            while ((n = in.read(buf)) != -1) {
-                                out.write(buf, 0, n);
-                                // Flush each read so tiny SSE events reach the browser immediately
-                                // instead of sitting in the chunked-output buffer until it fills.
-                                out.flush();
-                            }
+                            // Unlike builder.timeout() above, this also covers SSE paths: SSE needs
+                            // a far more tolerant timeout than regular requests (see SSE_STALL_TIMEOUT)
+                            // since idling for minutes with zero bytes is normal for it, not a stall.
+                            // This also guarantees the gate permit acquired above is released within a
+                            // bounded time even if the upstream genuinely stalls, instead of being held
+                            // forever.
+                            StallGuardedCopy.copy(in, out, isSse ? SSE_STALL_TIMEOUT : STALL_TIMEOUT, true);
                         }
                     }
                 }
@@ -180,6 +231,9 @@ public final class HttpsDashboardProxy {
                     // Best effort - connection may already be broken.
                 }
             } finally {
+                if (gateAcquired) {
+                    upstreamConcurrencyGate.release();
+                }
                 exchange.close();
             }
         }
