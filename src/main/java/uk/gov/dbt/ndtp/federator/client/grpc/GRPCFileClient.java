@@ -87,10 +87,24 @@ public class GRPCFileClient extends GRPCAbstractClient {
      * @throws FileAssemblyException if streaming or assembly encounters an unrecoverable error
      */
     public void processTopic(String topic, long offset, String destination) {
-        log.info("Processing file topic: '{}' with start_sequence_id: '{}'", topic, offset);
+        processTopic(topic, offset, destination, false);
+    }
+
+    /**
+     * As {@link #processTopic(String, long, String)}, optionally asking the server to re-seek the
+     * topic even if it already holds a committed offset for this client.
+     *
+     * @param forceReset true to request a full re-transfer regardless of server-side committed offsets
+     */
+    public void processTopic(String topic, long offset, String destination, boolean forceReset) {
+        log.info(
+                "Processing file topic: '{}' with start_sequence_id: '{}', force_reset: '{}'",
+                topic,
+                offset,
+                forceReset);
         validatePrerequisites(topic, destination);
 
-        FileStreamRequest request = buildFileStreamRequest(topic, offset);
+        FileStreamRequest request = buildFileStreamRequest(topic, offset, forceReset);
         FileChunkAssembler assembler = new FileChunkAssembler(destination, this.serverName);
 
         try {
@@ -123,10 +137,11 @@ public class GRPCFileClient extends GRPCAbstractClient {
      * @param offset sequence id to begin from
      * @return configured FileStreamRequest
      */
-    private FileStreamRequest buildFileStreamRequest(String topic, long offset) {
+    private FileStreamRequest buildFileStreamRequest(String topic, long offset, boolean forceReset) {
         return FileStreamRequest.newBuilder()
                 .setTopic(topic)
                 .setStartSequenceId(offset)
+                .setForceReset(forceReset)
                 .build();
     }
 

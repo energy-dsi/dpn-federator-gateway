@@ -87,6 +87,7 @@ class RdfMessageConductorTest {
         when(mockKafkaBuilder.topic(TOPIC)).thenReturn(mockKafkaBuilder);
         when(mockKafkaBuilder.consumerGroup(CLIENT_ID)).thenReturn(mockKafkaBuilder);
         when(mockKafkaBuilder.readPolicy(KafkaUtil.getReadPolicy(OFFSET))).thenReturn(mockKafkaBuilder);
+        when(mockKafkaBuilder.forceSeek(org.mockito.ArgumentMatchers.anyBoolean())).thenReturn(mockKafkaBuilder);
         when(mockKafkaBuilder.build()).thenReturn(mockEventSource);
     }
 

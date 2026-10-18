@@ -54,6 +54,7 @@ message TopicRequest {
 message FileStreamRequest {
   string Topic = 1;
   int64 start_sequence_id = 2;  // 0 = start from beginning, >0 = resume from sequence
+  bool force_reset = 3;         // explicit operator intent: re-seek even if the consumer group has a committed offset
 }
 
 

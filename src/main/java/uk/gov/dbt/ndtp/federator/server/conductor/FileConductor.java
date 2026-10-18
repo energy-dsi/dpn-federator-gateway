@@ -37,7 +37,8 @@ public class FileConductor extends AbstractKafkaEventMessageConductor<String, by
                         ByteArrayDeserializer.class,
                         topicData.getTopic(),
                         topicData.getOffset(),
-                        topicData.getClient()),
+                        topicData.getClient(),
+                        topicData.isForceReset()),
                 filterAttributes,
                 new FileKafkaEventMessageProcessor(serverCallStreamObserver));
     }

@@ -119,6 +119,40 @@ class GRPCFileClientTest {
     }
 
     @Test
+    void processTopic_forceReset_isSentOnRequest_andDefaultsToFalse() {
+        FederatorServiceGrpc.FederatorServiceBlockingStub stub =
+                mock(FederatorServiceGrpc.FederatorServiceBlockingStub.class);
+        when(stub.getFilesStream(any(FileStreamRequest.class))).thenReturn(List.<FileStreamEvent>of().iterator());
+
+        RedisUtil redisMock = mock(RedisUtil.class);
+        PropertyUtil.init("test.properties");
+        IdpTokenService idpMock = mock(IdpTokenService.class);
+
+        try (MockedStatic<FederatorServiceGrpc> grpcStatic = Mockito.mockStatic(FederatorServiceGrpc.class);
+                MockedStatic<RedisUtil> redisStatic = Mockito.mockStatic(RedisUtil.class);
+                MockedStatic<GRPCUtils> grpcUtilsStatic =
+                        Mockito.mockStatic(GRPCUtils.class, Mockito.CALLS_REAL_METHODS)) {
+            grpcStatic.when(() -> FederatorServiceGrpc.newBlockingStub(any())).thenReturn(stub);
+            redisStatic.when(RedisUtil::getInstance).thenReturn(redisMock);
+            redisStatic.when(RedisUtil::getKeycloakGatedInstance).thenReturn(redisMock);
+            grpcUtilsStatic.when(GRPCUtils::createIdpTokenService).thenReturn(idpMock);
+
+            GRPCFileClient clientUnderTest = new GRPCFileClient("cli", "k", "srv", "localhost", 50051, false, "tp");
+
+            clientUnderTest.processTopic("files.a", 0L, "test-dest/", true);
+            clientUnderTest.processTopic("files.a", 0L, "test-dest/");
+
+            org.mockito.ArgumentCaptor<FileStreamRequest> captor =
+                    org.mockito.ArgumentCaptor.forClass(FileStreamRequest.class);
+            verify(stub, times(2)).getFilesStream(captor.capture());
+            assertTrue(captor.getAllValues().get(0).getForceReset());
+            assertFalse(captor.getAllValues().get(1).getForceReset());
+        } finally {
+            PropertyUtil.clear();
+        }
+    }
+
+    @Test
     void processTopic_checksumMismatch_throwsFileAssemblyException_andDoesNotSaveOffset() {
         // Arrange
         String client = "cli2";

@@ -52,7 +52,18 @@ public class KafkaEventMessageConsumer<K, V> implements MessageConsumer<KafkaEve
 
     public KafkaEventMessageConsumer(
             Class<?> keyDeserializer, Class<?> valueDeserializer, String topic, long offset, String consumerGroup) {
+        this(keyDeserializer, valueDeserializer, topic, offset, consumerGroup, false);
+    }
+
+    public KafkaEventMessageConsumer(
+            Class<?> keyDeserializer,
+            Class<?> valueDeserializer,
+            String topic,
+            long offset,
+            String consumerGroup,
+            boolean forceReset) {
         source = KafkaUtil.<K, V>getKafkaSourceBuilder()
+                .forceSeek(forceReset)
                 .keyDeserializer(keyDeserializer)
                 .valueDeserializer(valueDeserializer)
                 .topic(topic)

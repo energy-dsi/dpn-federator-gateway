@@ -171,6 +171,7 @@ class KafkaStreamServiceTest {
         when(mockKafkaBuilder.topic(anyString())).thenReturn(mockKafkaBuilder);
         when(mockKafkaBuilder.consumerGroup(anyString())).thenReturn(mockKafkaBuilder);
         when(mockKafkaBuilder.readPolicy(any())).thenReturn(mockKafkaBuilder);
+        when(mockKafkaBuilder.forceSeek(org.mockito.ArgumentMatchers.anyBoolean())).thenReturn(mockKafkaBuilder);
         when(mockKafkaBuilder.build()).thenReturn(mockEventSource);
         return mockKafkaBuilder;
     }

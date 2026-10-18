@@ -34,11 +34,21 @@ public class ClientTopicOffsets {
     private final String client;
     private final String topic;
     private final long offset;
+    private final boolean forceReset;
 
     public ClientTopicOffsets(String client, String topic, long offset) {
+        this(client, topic, offset, false);
+    }
+
+    public ClientTopicOffsets(String client, String topic, long offset, boolean forceReset) {
         this.client = client;
         this.topic = topic;
         this.offset = offset;
+        this.forceReset = forceReset;
+    }
+
+    public boolean isForceReset() {
+        return forceReset;
     }
 
     public String getClient() {
