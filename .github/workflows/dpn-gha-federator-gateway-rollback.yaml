@@ -1,0 +1,172 @@
+name: DPN Rollback - Federator Gateway
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Select Environment"
+        required: true
+        default: "dev"
+        type: choice
+        options:
+          - dev
+          - test
+
+      cluster:
+        description: "Target DPN Cluster"
+        required: true
+        default: "dpn01"
+        type: choice
+        options:
+          - dpn01
+          - dpn02
+
+      cloud:
+        description: "Target Cloud Provider"
+        required: true
+        default: "aws"
+        type: choice
+        options:
+          - azure
+          - aws
+
+      targetRevision:
+        description: >-
+          Revision to roll back to. "0" (default) = the previous stable
+          revision — automatically resolved by filtering for deployed/
+          superseded status. Or enter a specific revision number from
+          "helm history dpn-platform".
+        required: true
+        default: "0"
+        type: string
+
+      confirm:
+        description: 'Type "dpn-platform" to confirm'
+        required: true
+        type: string
+
+env:
+  PARAMETERS_FILE: .github/config/${{ inputs.cloud }}/${{ inputs.environment }}-${{ inputs.cluster }}.json
+  RELEASE_NAME: dpn-platform
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  rollback:
+    name: Helm Rollback - Federator Gateway
+    runs-on: [self-hosted, vmss]
+    environment: ${{ inputs.environment }}-${{ inputs.cluster }}
+    steps:
+      - name: Validate Confirmation
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ inputs.confirm }}" != "$RELEASE_NAME" ]]; then
+            echo "ERROR: confirmation text '${{ inputs.confirm }}' does not match '$RELEASE_NAME'."
+            exit 1
+          fi
+
+      - name: Validate Revision Format
+        shell: bash
+        run: |
+          set -euo pipefail
+          REV="${{ inputs.targetRevision }}"
+          if ! echo "$REV" | grep -Eq '^[0-9]+$'; then
+            echo "ERROR: targetRevision '$REV' is not a non-negative integer."
+            exit 1
+          fi
+
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Read Deployment Config
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f "${PARAMETERS_FILE}" ]; then
+            echo "ERROR: ${PARAMETERS_FILE} not found!"
+            exit 1
+          fi
+          for key in $(jq -r 'keys_unsorted[]' "${PARAMETERS_FILE}"); do
+            value=$(jq -r ".\"$key\"" "${PARAMETERS_FILE}")
+            echo "${key}=${value}" >> "$GITHUB_ENV"
+          done
+
+      - name: Pre-Rollback Checklist
+        shell: bash
+        run: |
+          echo "CONFIRM BEFORE PROCEEDING:"
+          echo "1. Target release: $RELEASE_NAME (includes federator server, federator client, Kafka src/target, zookeeper, redis, kafka-ui)"
+          echo "2. Target revision: ${{ inputs.targetRevision }} (0 = previous stable revision)"
+          echo "3. Rolling back a Kafka/zookeeper topology change can be disruptive to in-flight messages — check"
+          echo "   'helm history $RELEASE_NAME' and the diff between revisions before proceeding"
+          echo "4. Vault AppRole role_id (vaultConfig.appRole.roleId) and federator client/server TLS material are"
+          echo "   unaffected by rollback either way"
+
+      - name: Cloud Login
+        uses: ./.github/actions/cloud-login
+        with:
+          cloud: ${{ inputs.cloud }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          aws-region: ${{ env.AWS_REGION }}
+          aws-account-id: ${{ env.AWS_ACCOUNT_ID }}
+          eks-cluster: ${{ env.EKS_CLUSTER }}
+
+      - name: Helm Rollback
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if ! helm status "$RELEASE_NAME" -n "$NAMESPACE" >/dev/null 2>&1; then
+            echo "::error::Release '$RELEASE_NAME' not found in namespace '$NAMESPACE'. Nothing to roll back."
+            exit 1
+          fi
+
+          echo "--- Release history (before rollback) ---"
+          helm history "$RELEASE_NAME" -n "$NAMESPACE"
+
+          HISTORY_JSON=$(helm history "$RELEASE_NAME" -n "$NAMESPACE" -o json)
+          TARGET_REVISION="${{ inputs.targetRevision }}"
+
+          if [[ "$TARGET_REVISION" == "0" ]]; then
+            REV=$(echo "$HISTORY_JSON" | jq -r '
+              map(select(.status=="deployed" or .status=="superseded")) | .[-2].revision // empty
+            ')
+            if [[ -z "$REV" ]]; then
+              echo "::error::'$RELEASE_NAME' has no previous deployed/superseded revision to roll back to."
+              exit 1
+            fi
+            echo "Resolved 'previous stable' revision: $REV"
+          else
+            REV="$TARGET_REVISION"
+          fi
+
+          STATUS=$(echo "$HISTORY_JSON" | jq -r --arg rev "$REV" '.[] | select(.revision == ($rev|tonumber)) | .status')
+          if [[ -z "$STATUS" ]]; then
+            echo "::error::Revision '$REV' does not exist in history for '$RELEASE_NAME'."
+            exit 1
+          fi
+          if [[ "$STATUS" != "deployed" && "$STATUS" != "superseded" ]]; then
+            echo "::error::Revision '$REV' has status '$STATUS'. Rollback blocked."
+            exit 1
+          fi
+
+          echo "--- Dry run ---"
+          helm rollback "$RELEASE_NAME" "$REV" -n "$NAMESPACE" --dry-run
+
+          echo "--- Executing rollback ---"
+          helm rollback "$RELEASE_NAME" "$REV" -n "$NAMESPACE" --wait --timeout 15m
+
+          echo "--- Release history (after rollback) ---"
+          helm history "$RELEASE_NAME" -n "$NAMESPACE"
+
+      - name: Post-Rollback Verification
+        shell: bash
+        run: |
+          set -uo pipefail
+          sleep 30
+          kubectl get pods -n "$NAMESPACE" -o wide
+          helm list -n "$NAMESPACE"

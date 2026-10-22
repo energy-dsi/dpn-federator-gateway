@@ -1,0 +1,98 @@
+{{- if .Values.zookeeperSrc.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Values.zookeeperSrc.name }}-pvc
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ .Values.zookeeperSrc.name }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: {{ .Values.zookeeperSrc.persistence.storageClass }}
+  resources:
+    requests:
+      storage: {{ .Values.zookeeperSrc.persistence.size }}
+---
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.zookeeperSrc.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ .Values.zookeeperSrc.name }}
+spec:
+  replicas: {{ .Values.zookeeperSrc.replicaCount }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: {{ .Values.zookeeperSrc.name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.zookeeperSrc.name }}
+    spec:
+      securityContext:
+        runAsUser: {{ .Values.zookeeperSrc.securityContext.runAsUser }}
+        runAsGroup: {{ .Values.zookeeperSrc.securityContext.runAsGroup }}
+        fsGroup: {{ .Values.zookeeperSrc.securityContext.fsGroup }}
+      containers:
+        - name: zookeeper
+          image: "{{ .Values.zookeeperSrc.image.repository }}:{{ .Values.zookeeperSrc.image.tag }}"
+          imagePullPolicy: {{ .Values.zookeeperSrc.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+          ports:
+            - containerPort: {{ .Values.zookeeperSrc.service.port }}
+          env:
+            - name: ZOOKEEPER_CLIENT_PORT
+              value: "{{ .Values.zookeeperSrc.env.ZOOKEEPER_CLIENT_PORT }}"
+            - name: ZOOKEEPER_SERVER_ID
+              value: "{{ .Values.zookeeperSrc.env.ZOOKEEPER_SERVER_ID }}"
+            - name: ZOOKEEPER_SERVERS
+              value: "{{ .Values.zookeeperSrc.env.ZOOKEEPER_SERVERS }}"
+          readinessProbe:
+            tcpSocket:
+              port: {{ .Values.zookeeperSrc.service.port }}
+            initialDelaySeconds: {{ .Values.zookeeperSrc.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.zookeeperSrc.readinessProbe.periodSeconds }}
+          livenessProbe:
+            tcpSocket:
+              port: {{ .Values.zookeeperSrc.service.port }}
+            initialDelaySeconds: {{ .Values.zookeeperSrc.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.zookeeperSrc.livenessProbe.periodSeconds }}
+          {{- with .Values.zookeeperSrc.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: zookeeper-data
+              mountPath: /var/lib/zookeeper/data
+              subPath: data
+            - name: zookeeper-data
+              mountPath: /var/lib/zookeeper/log
+              subPath: log
+      volumes:
+        - name: zookeeper-data
+{{- if .Values.zookeeperSrc.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.zookeeperSrc.name }}-pvc
+{{- else }}
+          emptyDir: {}
+{{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.zookeeperSrc.name }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    app: {{ .Values.zookeeperSrc.name }}
+  ports:
+    - name: client
+      port: {{ .Values.zookeeperSrc.service.port }}
+      targetPort: {{ .Values.zookeeperSrc.service.port }}
+

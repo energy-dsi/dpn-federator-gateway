@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: federator-client-connection-config
+  namespace: {{ .Release.Namespace }}
+data:
+  connection-configuration.json: |
+    [
+      {
+        "credentials": {
+          "name": "ndtp.server1.client1",
+          "key": "client1-password"
+        },
+        "server": {
+          "name": "FederatorServer1",
+          "host": "{{ .Values.federatorServer.name }}",
+          "port": {{ .Values.federatorServer.service.port }}
+        },
+        "tls": {
+          "enabled": true
+        }
+      }
+    ]
