@@ -67,6 +67,12 @@ class ClientGRPCFileExchangeJobTest {
 
         when(redisUtil.getOffset(anyString(), eq("topic"))).thenReturn(10L);
 
+        // The property is not configured, so PropertyUtil returns the default the job passes in.
+        // force reset is on by default, so that default must be "true".
+        propertyUtilMockedStatic
+                .when(() -> PropertyUtil.getPropertyBooleanValue("file.exchange.force.reset", "true"))
+                .thenReturn(true);
+
         try (MockedConstruction<GRPCFileClient> mocked = mockConstruction(GRPCFileClient.class, (mock, context) -> {
             when(mock.getRedisPrefix()).thenReturn("redis-prefix");
         })) {
@@ -74,12 +80,13 @@ class ClientGRPCFileExchangeJobTest {
             job.run(params);
 
             GRPCFileClient mockClient = mocked.constructed().get(0);
-            verify(mockClient).processTopic("topic", 10L, "dest", false);
+            verify(mockClient).processTopic("topic", 10L, "dest", true);
+            propertyUtilMockedStatic.verify(() -> PropertyUtil.getPropertyBooleanValue("file.exchange.force.reset", "true"));
         }
     }
 
     @Test
-    void testRun_forceResetProperty_isPassedToClient() {
+    void testRun_forceResetDisabled_isPassedToClient() {
         ConnectionProperties conn = mock(ConnectionProperties.class);
         FileExchangeProperties fep = FileExchangeProperties.builder()
                 .sourcePath("src")
@@ -89,10 +96,10 @@ class ClientGRPCFileExchangeJobTest {
 
         when(redisUtil.getOffset(anyString(), eq("topic"))).thenReturn(0L);
 
-        // PropertyUtil is already statically mocked in setUp()
+        // Operator opts out: file.exchange.force.reset=false (PropertyUtil is already statically mocked in setUp())
         propertyUtilMockedStatic
-                .when(() -> PropertyUtil.getPropertyBooleanValue("file.exchange.force.reset", "false"))
-                .thenReturn(true);
+                .when(() -> PropertyUtil.getPropertyBooleanValue("file.exchange.force.reset", "true"))
+                .thenReturn(false);
 
         try (MockedConstruction<GRPCFileClient> mocked = mockConstruction(GRPCFileClient.class, (mock, context) -> {
             when(mock.getRedisPrefix()).thenReturn("redis-prefix");
@@ -100,7 +107,7 @@ class ClientGRPCFileExchangeJobTest {
             ClientGRPCFileExchangeJob job = new ClientGRPCFileExchangeJob(params);
             job.run(params);
 
-            verify(mocked.constructed().get(0)).processTopic("topic", 0L, "dest", true);
+            verify(mocked.constructed().get(0)).processTopic("topic", 0L, "dest", false);
         }
     }
 

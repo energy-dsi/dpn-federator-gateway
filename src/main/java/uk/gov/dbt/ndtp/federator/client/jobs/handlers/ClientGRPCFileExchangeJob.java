@@ -95,9 +95,10 @@ public class ClientGRPCFileExchangeJob implements Job {
                         new GRPCFileClient(request.getConnectionProperties(), prefixSupplier.get())) {
             long offset = offsetProvider.applyAsLong(grpcClient.getRedisPrefix(), topic);
             log.info("offset:{} , topic:{}", offset, topic);
-            // Opt-in, one-off: set file.exchange.force.reset=true after clearing the Redis cache to
-            // make the server re-seek despite its committed offset. Turn it off again afterwards.
-            boolean forceReset = PropertyUtil.getPropertyBooleanValue(FORCE_RESET_PROPERTY, "false");
+            // Always on by default: the client's stored (Redis) offset decides what is sent, so a
+            // cleared cache re-sends every file and an intact cache sends only new files. Set
+            // file.exchange.force.reset=false to fall back to the server's committed-offset guard.
+            boolean forceReset = PropertyUtil.getPropertyBooleanValue(FORCE_RESET_PROPERTY, "true");
             grpcClient.processTopic(topic, offset, destinationPath, forceReset);
         } catch (Exception e) {
             span.recordException(e);
