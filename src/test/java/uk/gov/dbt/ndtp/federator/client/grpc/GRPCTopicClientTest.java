@@ -175,6 +175,58 @@ class GRPCTopicClientTest {
     }
 
     @Test
+    void processTopic_sendsForceResetInTheRequest() {
+        ManagedChannel channel = mock(ManagedChannel.class);
+        when(channel.shutdown()).thenReturn(channel);
+        KafkaSink<Bytes, Bytes> sink = mock(KafkaSink.class);
+        RedisUtil redis = mock(RedisUtil.class);
+
+        try (MockedStatic<KafkaUtil> kafkaMock = mockStatic(KafkaUtil.class);
+                MockedStatic<RedisUtil> redisMock = mockStatic(RedisUtil.class)) {
+            kafkaMock.when(() -> KafkaUtil.getKafkaSink(anyString())).thenReturn(sink);
+            redisMock.when(RedisUtil::getKeycloakGatedInstance).thenReturn(redis);
+
+            GRPCTopicClient client = spy(new GRPCTopicClient("client", "key", "server", "pref", channel));
+            doNothing().when(client).consumeMessagesAndSendOn(any(), any());
+            org.mockito.ArgumentCaptor<TopicRequest> captor = org.mockito.ArgumentCaptor.forClass(TopicRequest.class);
+
+            client.processTopic("topic", 0L, true);
+            client.processTopic("topic", 7L, false);
+
+            verify(client, org.mockito.Mockito.times(2)).consumeMessagesAndSendOn(captor.capture(), eq(sink));
+            assertEquals(true, captor.getAllValues().get(0).getForceReset());
+            assertEquals(0L, captor.getAllValues().get(0).getOffset());
+            assertEquals(false, captor.getAllValues().get(1).getForceReset());
+            assertEquals(7L, captor.getAllValues().get(1).getOffset());
+            client.close();
+        }
+    }
+
+    @Test
+    void processTopic_twoArgumentDefaultsForceResetToTrue() {
+        ManagedChannel channel = mock(ManagedChannel.class);
+        when(channel.shutdown()).thenReturn(channel);
+        KafkaSink<Bytes, Bytes> sink = mock(KafkaSink.class);
+        RedisUtil redis = mock(RedisUtil.class);
+
+        try (MockedStatic<KafkaUtil> kafkaMock = mockStatic(KafkaUtil.class);
+                MockedStatic<RedisUtil> redisMock = mockStatic(RedisUtil.class)) {
+            kafkaMock.when(() -> KafkaUtil.getKafkaSink(anyString())).thenReturn(sink);
+            redisMock.when(RedisUtil::getKeycloakGatedInstance).thenReturn(redis);
+
+            GRPCTopicClient client = spy(new GRPCTopicClient("client", "key", "server", "pref", channel));
+            doNothing().when(client).consumeMessagesAndSendOn(any(), any());
+            org.mockito.ArgumentCaptor<TopicRequest> captor = org.mockito.ArgumentCaptor.forClass(TopicRequest.class);
+
+            client.processTopic("topic", 0L);
+
+            verify(client).consumeMessagesAndSendOn(captor.capture(), eq(sink));
+            assertEquals(true, captor.getValue().getForceReset());
+            client.close();
+        }
+    }
+
+    @Test
     void processTopic_statusRuntimeException_invalidArgument() {
         ManagedChannel channel = mock(ManagedChannel.class);
         when(channel.shutdown()).thenReturn(channel);

@@ -49,6 +49,7 @@ message KafkaByteBatch {
 message TopicRequest {
   string Topic = 1;
   int64 Offset = 2;
+  bool force_reset = 3;         // explicit operator intent: re-seek to Offset even if the consumer group has a committed offset
 }
 
 message FileStreamRequest {
