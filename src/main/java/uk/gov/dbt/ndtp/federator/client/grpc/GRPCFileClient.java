@@ -11,13 +11,13 @@ import uk.gov.dbt.ndtp.federator.client.connection.ConnectionProperties;
 import uk.gov.dbt.ndtp.federator.client.grpc.file.FileChunkAssembler;
 import uk.gov.dbt.ndtp.federator.client.grpc.file.FileVersionFinalizer;
 import uk.gov.dbt.ndtp.federator.client.grpc.file.FileVersionPlanner;
+import uk.gov.dbt.ndtp.federator.common.checksum.ChecksumValidationReporter;
 import uk.gov.dbt.ndtp.federator.common.utils.RedisUtil;
 import uk.gov.dbt.ndtp.federator.exceptions.FileAssemblyException;
 import uk.gov.dbt.ndtp.grpc.FileChunk;
 import uk.gov.dbt.ndtp.grpc.FileStreamEvent;
 import uk.gov.dbt.ndtp.grpc.FileStreamRequest;
 import uk.gov.dbt.ndtp.grpc.StreamWarning;
-import uk.gov.dbt.ndtp.federator.common.checksum.ChecksumValidationReporter;
 
 /**
  * GRPC client responsible for streaming files from the Federator service and assembling them locally.
@@ -177,8 +177,7 @@ public class GRPCFileClient extends GRPCAbstractClient {
                     topic,
                     lastStoredSeq + 1);
         } else {
-            log.info(
-                    "No files stored for topic '{}' (empty stream or upload failure); offset not advanced.", topic);
+            log.info("No files stored for topic '{}' (empty stream or upload failure); offset not advanced.", topic);
         }
         log.info("Finished processing stream for topic '{}'", topic);
     }
@@ -239,9 +238,7 @@ public class GRPCFileClient extends GRPCAbstractClient {
     private void handleWarningEvent(String topic, StreamWarning warning) {
         saveNextOffsetToRedis(topic, warning.getSkippedSequenceId());
         log.warn(ChecksumValidationReporter.fileSkipped(
-                warning.getSkippedSequenceId(),
-                warning.getReason(),
-                warning.getDetails()));
+                warning.getSkippedSequenceId(), warning.getReason(), warning.getDetails()));
         // Behaviour preserved from the per-file implementation: a warning records the skipped sequence id
         // so upstream retry logic does not loop forever.
     }

@@ -138,8 +138,7 @@ class GRPCTopicClientTest {
         ManagedChannel channel = mock(ManagedChannel.class);
         when(channel.shutdown()).thenReturn(channel);
         // Make the channel produce a ClientCall that fails fast, instead of null:
-        when(channel.newCall(any(), any()))
-                .thenThrow(new StatusRuntimeException(Status.UNAVAILABLE));
+        when(channel.newCall(any(), any())).thenThrow(new StatusRuntimeException(Status.UNAVAILABLE));
 
         GRPCTopicClient client = new GRPCTopicClient("c", "k", "s", "p", channel);
 
@@ -222,6 +221,63 @@ class GRPCTopicClientTest {
 
             verify(client).consumeMessagesAndSendOn(captor.capture(), eq(sink));
             assertEquals(true, captor.getValue().getForceReset());
+            client.close();
+        }
+    }
+
+    @Test
+    void processTopic_twoArgument_followsTheConfiguredOptOut() {
+        ManagedChannel channel = mock(ManagedChannel.class);
+        when(channel.shutdown()).thenReturn(channel);
+        KafkaSink<Bytes, Bytes> sink = mock(KafkaSink.class);
+        RedisUtil redis = mock(RedisUtil.class);
+        // built before PropertyUtil is mocked, so the constructor's own property reads are unaffected
+        GRPCTopicClient client = spy(new GRPCTopicClient("client", "key", "server", "pref", channel));
+        doNothing().when(client).consumeMessagesAndSendOn(any(), any());
+        org.mockito.ArgumentCaptor<TopicRequest> captor = org.mockito.ArgumentCaptor.forClass(TopicRequest.class);
+
+        try (MockedStatic<KafkaUtil> kafkaMock = mockStatic(KafkaUtil.class);
+                MockedStatic<RedisUtil> redisMock = mockStatic(RedisUtil.class);
+                MockedStatic<uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil> props =
+                        mockStatic(uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil.class)) {
+            kafkaMock.when(() -> KafkaUtil.getKafkaSink(anyString())).thenReturn(sink);
+            redisMock.when(RedisUtil::getKeycloakGatedInstance).thenReturn(redis);
+            props.when(() -> uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil.getPropertyBooleanValue(
+                            "topic.exchange.force.reset", "true"))
+                    .thenReturn(false);
+
+            client.processTopic("topic", 0L);
+
+            verify(client).consumeMessagesAndSendOn(captor.capture(), eq(sink));
+            assertEquals(false, captor.getValue().getForceReset());
+        }
+        client.close();
+    }
+
+    @Test
+    void processTopic_redisCleared_requestsFromTheBeginning_andRedisKept_requestsTheSavedOffset() {
+        ManagedChannel channel = mock(ManagedChannel.class);
+        when(channel.shutdown()).thenReturn(channel);
+        KafkaSink<Bytes, Bytes> sink = mock(KafkaSink.class);
+        RedisUtil redis = mock(RedisUtil.class);
+
+        try (MockedStatic<KafkaUtil> kafkaMock = mockStatic(KafkaUtil.class);
+                MockedStatic<RedisUtil> redisMock = mockStatic(RedisUtil.class)) {
+            kafkaMock.when(() -> KafkaUtil.getKafkaSink(anyString())).thenReturn(sink);
+            redisMock.when(RedisUtil::getKeycloakGatedInstance).thenReturn(redis);
+
+            GRPCTopicClient client = spy(new GRPCTopicClient("client", "key", "server", "pref", channel));
+            doNothing().when(client).consumeMessagesAndSendOn(any(), any());
+            org.mockito.ArgumentCaptor<TopicRequest> captor = org.mockito.ArgumentCaptor.forClass(TopicRequest.class);
+
+            client.processTopic("topic", 0L, true); // Redis cleared: the job reads offset 0
+            client.processTopic("topic", 25L, true); // Redis kept: the job reads the saved offset
+
+            verify(client, org.mockito.Mockito.times(2)).consumeMessagesAndSendOn(captor.capture(), eq(sink));
+            assertEquals(0L, captor.getAllValues().get(0).getOffset());
+            assertEquals(25L, captor.getAllValues().get(1).getOffset());
+            assertEquals(true, captor.getAllValues().get(0).getForceReset());
+            assertEquals(true, captor.getAllValues().get(1).getForceReset());
             client.close();
         }
     }
@@ -406,8 +462,10 @@ class GRPCTopicClientTest {
     private KafkaByteBatch batchWithWrongChecksum(String topic, long offset) {
         ByteString payload = ByteString.copyFromUtf8("test-rdf-payload");
         return KafkaByteBatch.newBuilder()
-                .setTopic(topic).setOffset(offset)
-                .setValue(payload).setKey(ByteString.copyFromUtf8("k"))
+                .setTopic(topic)
+                .setOffset(offset)
+                .setValue(payload)
+                .setKey(ByteString.copyFromUtf8("k"))
                 .setPayloadChecksum("000000wrongchecksum000000")
                 .setChecksumAlgorithm("SHA-256")
                 .build();
@@ -416,28 +474,30 @@ class GRPCTopicClientTest {
     private KafkaByteBatch batchWithCorrectChecksum(String topic, long offset) {
         ByteString payload = ByteString.copyFromUtf8("test-rdf-payload");
         return KafkaByteBatch.newBuilder()
-                .setTopic(topic).setOffset(offset)
-                .setValue(payload).setKey(ByteString.copyFromUtf8("k"))
+                .setTopic(topic)
+                .setOffset(offset)
+                .setValue(payload)
+                .setKey(ByteString.copyFromUtf8("k"))
                 .setPayloadChecksum(PayloadChecksumUtil.compute(payload))
                 .setChecksumAlgorithm("SHA-256")
                 .build();
     }
+
     @Test
     void checksum_pass_messageWrittenToKafka() {
         // PASS → message must reach sendMessage()
-        KafkaSink<Bytes,Bytes> sink = mock(KafkaSink.class);
+        KafkaSink<Bytes, Bytes> sink = mock(KafkaSink.class);
         KafkaByteBatch batch = batchWithCorrectChecksum("topic", 0L);
         // simulate via simulateOnNext — PASS means written=true
-        boolean pass = PayloadChecksumUtil.verify(
-                batch.getValue(), batch.getPayloadChecksum(), "topic", 0L);
+        boolean pass = PayloadChecksumUtil.verify(batch.getValue(), batch.getPayloadChecksum(), "topic", 0L);
         assertTrue(pass, "Correct checksum must return PASS");
     }
+
     @Test
     void checksum_fail_skip_messageNotWritten() {
         // SKIP → message must NOT be written
         ByteString payload = ByteString.copyFromUtf8("rdf");
-        boolean pass = PayloadChecksumUtil.verify(
-                payload, "wrongchecksum", "topic", 1L);
+        boolean pass = PayloadChecksumUtil.verify(payload, "wrongchecksum", "topic", 1L);
         assertFalse(pass, "Wrong checksum must return FAIL");
     }
 
@@ -505,6 +565,4 @@ class GRPCTopicClientTest {
 
         assertTrue(guidance.contains("unexpected error"));
     }
-
-
 }
