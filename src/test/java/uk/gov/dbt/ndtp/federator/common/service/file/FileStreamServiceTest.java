@@ -77,4 +77,52 @@ class FileStreamServiceTest {
             verify(observer, times(1)).onCompleted();
         }
     }
+
+    @Test
+    void test_streamToClient_passesForceResetFromRequestToConductor() {
+        assertForceResetReachesConductor(true);
+        assertForceResetReachesConductor(false);
+    }
+
+    private void assertForceResetReachesConductor(boolean forceReset) {
+        FileStreamService cut = new FileStreamService();
+        StreamObservable<FileStreamEvent> observer = mock(StreamObservable.class);
+        ExecutorService executorService = mock(ExecutorService.class);
+        Future mockFuture = mock(Future.class);
+        when(executorService.submit(any(Runnable.class))).thenReturn(mockFuture);
+
+        FileStreamRequest req = FileStreamRequest.newBuilder()
+                .setTopic("files-topic")
+                .setStartSequenceId(0L)
+                .setForceReset(forceReset)
+                .build();
+
+        java.util.List<uk.gov.dbt.ndtp.federator.server.consumer.ClientTopicOffsets> seen =
+                new java.util.ArrayList<>();
+        try (MockedConstruction<FileConductor> mocked = Mockito.mockConstruction(
+                        FileConductor.class, (mock, ctx) -> seen.add((uk.gov.dbt.ndtp.federator.server.consumer.ClientTopicOffsets)
+                                ctx.arguments().get(0)));
+                MockedStatic<ProducerConsumerConfigServiceFactory> mockedFactory =
+                        Mockito.mockStatic(ProducerConsumerConfigServiceFactory.class)) {
+            ProducerConfigService mockConfigService = Mockito.mock(ProducerConfigService.class);
+            mockedFactory
+                    .when(ProducerConsumerConfigServiceFactory::getProducerConfigService)
+                    .thenReturn(mockConfigService);
+            Mockito.when(mockConfigService.getProducerConfiguration())
+                    .thenReturn(ProducerConfigDTO.builder()
+                            .producers(java.util.List.of())
+                            .build());
+
+            Context grpcCtx = Context.current().withValue(GRPCContextKeys.CLIENT_ID, "client-xyz");
+            Context prev = grpcCtx.attach();
+            try {
+                cut.streamToClient(req, observer, executorService);
+            } finally {
+                grpcCtx.detach(prev);
+            }
+        }
+
+        assertEquals(1, seen.size());
+        assertEquals(forceReset, seen.get(0).isForceReset());
+    }
 }

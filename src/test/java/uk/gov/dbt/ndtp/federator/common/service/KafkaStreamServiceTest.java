@@ -171,6 +171,7 @@ class KafkaStreamServiceTest {
         when(mockKafkaBuilder.topic(anyString())).thenReturn(mockKafkaBuilder);
         when(mockKafkaBuilder.consumerGroup(anyString())).thenReturn(mockKafkaBuilder);
         when(mockKafkaBuilder.readPolicy(any())).thenReturn(mockKafkaBuilder);
+        when(mockKafkaBuilder.forceSeek(org.mockito.ArgumentMatchers.anyBoolean())).thenReturn(mockKafkaBuilder);
         when(mockKafkaBuilder.build()).thenReturn(mockEventSource);
         return mockKafkaBuilder;
     }
@@ -179,9 +180,21 @@ class KafkaStreamServiceTest {
 
     @Test
     void test_streamToClient_awaitsTheFutureSubmittedToTheExecutorService() throws IOException {
+        streamAndVerifyForceSeek(false);
+    }
+
+    @Test
+    void test_streamToClient_passesForceResetToTheKafkaSource() throws IOException {
+        streamAndVerifyForceSeek(true);
+    }
+
+    private void streamAndVerifyForceSeek(boolean forceReset) throws IOException {
         KafkaStreamService cut = new KafkaStreamService(EMPTY_SHARED_HEADERS);
-        TopicRequest req =
-                TopicRequest.newBuilder().setTopic("test").setOffset(0L).build();
+        TopicRequest req = TopicRequest.newBuilder()
+                .setTopic("test")
+                .setOffset(0L)
+                .setForceReset(forceReset)
+                .build();
         StreamObservable observer = mock(StreamObservable.class);
         ExecutorService executorService = mock(ExecutorService.class);
 
@@ -261,6 +274,7 @@ class KafkaStreamServiceTest {
             }
 
             verify(executorService, times(1)).submit(any(Runnable.class));
+            verify(mockKafkaBuilder).forceSeek(forceReset);
 
             try {
                 verify(mockFuture, times(1)).get();

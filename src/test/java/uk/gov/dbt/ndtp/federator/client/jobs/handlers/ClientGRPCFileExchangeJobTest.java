@@ -74,7 +74,28 @@ class ClientGRPCFileExchangeJobTest {
             job.run(params);
 
             GRPCFileClient mockClient = mocked.constructed().get(0);
-            verify(mockClient).processTopic("topic", 10L, "dest");
+            verify(mockClient).processTopic("topic", 10L, "dest", true);
+        }
+    }
+
+    @Test
+    void testRun_redisCleared_requestsFromTheBeginningWithForceReset() {
+        ConnectionProperties conn = mock(ConnectionProperties.class);
+        FileExchangeProperties fep = FileExchangeProperties.builder()
+                .sourcePath("src")
+                .destinationPath("dest")
+                .build();
+        ClientFileExchangeGRPCJobParams params = new ClientFileExchangeGRPCJobParams(fep, "topic", conn, "node-1");
+
+        when(redisUtil.getOffset(anyString(), eq("topic"))).thenReturn(0L);
+
+        try (MockedConstruction<GRPCFileClient> mocked = mockConstruction(GRPCFileClient.class, (mock, context) -> {
+            when(mock.getRedisPrefix()).thenReturn("redis-prefix");
+        })) {
+            ClientGRPCFileExchangeJob job = new ClientGRPCFileExchangeJob(params);
+            job.run(params);
+
+            verify(mocked.constructed().get(0)).processTopic("topic", 0L, "dest", true);
         }
     }
 
@@ -101,7 +122,9 @@ class ClientGRPCFileExchangeJobTest {
         ClientFileExchangeGRPCJobParams params = new ClientFileExchangeGRPCJobParams(fep, "topic", conn, "node-1");
 
         try (MockedConstruction<GRPCFileClient> mocked = mockConstruction(GRPCFileClient.class, (mock, context) -> {
-            doThrow(new RuntimeException("error")).when(mock).processTopic(anyString(), anyLong(), anyString());
+            doThrow(new RuntimeException("error"))
+                    .when(mock)
+                    .processTopic(anyString(), anyLong(), anyString(), anyBoolean());
         })) {
             ClientGRPCFileExchangeJob job = new ClientGRPCFileExchangeJob(params);
             assertThrows(ClientGRPCJobException.class, () -> job.run(params));

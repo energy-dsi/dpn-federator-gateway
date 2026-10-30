@@ -50,7 +50,7 @@ public class KafkaStreamService extends CloseableFederatorStreamService<TopicReq
         }
 
         List<AttributesDTO> filterAttributes = getFilterAttributesForConsumer(consumerId, topic, producerConfigDTO);
-        ClientTopicOffsets topicData = new ClientTopicOffsets(consumerId, topic, offset);
+        ClientTopicOffsets topicData = new ClientTopicOffsets(consumerId, topic, offset, request.getForceReset());
         MessageConductor messageConductor =
                 new RdfMessageConductor(topicData, streamObservable, filterAttributes, this.sharedHeaders);
         messageConductors.add(messageConductor);

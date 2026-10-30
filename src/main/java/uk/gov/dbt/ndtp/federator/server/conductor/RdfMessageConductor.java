@@ -64,7 +64,8 @@ public class RdfMessageConductor extends AbstractKafkaEventMessageConductor<Stri
                         RdfPayloadDeserializer.class,
                         topicData.getTopic(),
                         topicData.getOffset(),
-                        topicData.getClient()),
+                        topicData.getClient(),
+                        topicData.isForceReset()),
                 filterAttributes,
                 new RdfKafkaEventMessageProcessor(serverCallStreamObserver, sharedHeaders));
     }

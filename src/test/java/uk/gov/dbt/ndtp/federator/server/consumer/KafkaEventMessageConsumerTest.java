@@ -29,6 +29,7 @@ package uk.gov.dbt.ndtp.federator.server.consumer;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 import static org.mockito.Mockito.times;
@@ -74,6 +75,7 @@ class KafkaEventMessageConsumerTest {
         when(mockKafkaBuilder.topic("TOPIC")).thenReturn(mockKafkaBuilder);
         when(mockKafkaBuilder.consumerGroup(anyString())).thenReturn(mockKafkaBuilder);
         when(mockKafkaBuilder.readPolicy(any())).thenReturn(mockKafkaBuilder);
+        when(mockKafkaBuilder.forceSeek(anyBoolean())).thenReturn(mockKafkaBuilder);
         when(mockKafkaBuilder.build()).thenReturn(mockEventSource);
         when(mockEventSource.isClosed()).thenReturn(false);
         doNothing().when(mockEventSource).close();

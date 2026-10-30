@@ -160,11 +160,24 @@ public class GRPCTopicClient extends GRPCAbstractClient {
     }
 
     public void processTopic(String topic, long offset) {
-        LOGGER.info("Processing topic: '{}' with offset: '{}'", topic, offset);
+        processTopic(topic, offset, true);
+    }
+
+    /**
+     * As {@link #processTopic(String, long)}, optionally asking the server to re-seek to the given offset even
+     * when its consumer group already has a committed offset (e.g. after the client's Redis cache was cleared).
+     *
+     * @param forceReset true to follow the client's offset regardless of server-side committed offsets
+     */
+    public void processTopic(String topic, long offset, boolean forceReset) {
+        LOGGER.info("Processing topic: '{}' with offset: '{}', force_reset: '{}'", topic, offset, forceReset);
         RedisUtil.getKeycloakGatedInstance();
         LOGGER.debug("Redis connectivity check passed");
-        TopicRequest topicRequest =
-                TopicRequest.newBuilder().setTopic(topic).setOffset(offset).build();
+        TopicRequest topicRequest = TopicRequest.newBuilder()
+                .setTopic(topic)
+                .setOffset(offset)
+                .setForceReset(forceReset)
+                .build();
 
         try (KafkaSink<Bytes, Bytes> sink = getSender(topic, this.topicPrefix, this.serverName)) {
             LOGGER.debug("Kafka sink created successfully");

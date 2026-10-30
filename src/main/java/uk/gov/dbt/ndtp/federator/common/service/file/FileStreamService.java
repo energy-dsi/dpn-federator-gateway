@@ -33,7 +33,8 @@ public class FileStreamService extends CloseableFederatorStreamService<FileStrea
         ProducerConfigDTO producerConfigDTO = getProducerConfiguration();
         List<AttributesDTO> filterAttributes = getFilterAttributesForConsumer(consumerId, topic, producerConfigDTO);
 
-        ClientTopicOffsets topicData = new ClientTopicOffsets(consumerId, fileRequest.getTopic(), offset);
+        ClientTopicOffsets topicData =
+                new ClientTopicOffsets(consumerId, fileRequest.getTopic(), offset, fileRequest.getForceReset());
         MessageConductor messageConductor = new FileConductor(topicData, streamObservable, filterAttributes);
         messageConductors.add(messageConductor);
 

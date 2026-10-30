@@ -94,7 +94,9 @@ public class ClientGRPCFileExchangeJob implements Job {
                         new GRPCFileClient(request.getConnectionProperties(), prefixSupplier.get())) {
             long offset = offsetProvider.applyAsLong(grpcClient.getRedisPrefix(), topic);
             log.info("offset:{} , topic:{}", offset, topic);
-            grpcClient.processTopic(topic, offset, destinationPath);
+            // The client's stored (Redis) offset always decides what is sent: a cleared cache
+            // re-sends every file and an intact cache sends only new files.
+            grpcClient.processTopic(topic, offset, destinationPath, true);
         } catch (Exception e) {
             span.recordException(e);
             span.setStatus(StatusCode.ERROR, e.getMessage());

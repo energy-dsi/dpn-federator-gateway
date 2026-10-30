@@ -48,7 +48,8 @@ public class KafkaEventSource<Key, Value> implements EventSource<Key, Value> {
     private final Deque<ConsumerRecord<Key, Value>> buffer = new ArrayDeque<>();
     private volatile boolean closed = false;
 
-    private KafkaEventSource(Properties props, String topic, KafkaReadPolicy<Key, Value> readPolicy) {
+    private KafkaEventSource(
+            Properties props, String topic, KafkaReadPolicy<Key, Value> readPolicy, boolean forceSeek) {
         this.topic = Objects.requireNonNull(topic, "Kafka topic to read cannot be null");
         this.consumer = new KafkaConsumer<>(props);
         this.consumer.subscribe(java.util.List.of(topic), new ConsumerRebalanceListener() {
@@ -74,8 +75,10 @@ public class KafkaEventSource<Key, Value> implements EventSource<Key, Value> {
                 List<TopicPartition> uncommitted = partitions.stream()
                         .filter(tp -> committed.get(tp) == null)
                         .toList();
-                if (!uncommitted.isEmpty()) {
-                    readPolicy.startReading(consumer, uncommitted);
+                // forceSeek is an explicit operator request (e.g. client cleared its cache and
+                // wants a full re-transfer), so it overrides the committed-offset guard.
+                if (forceSeek || !uncommitted.isEmpty()) {
+                    readPolicy.startReading(consumer, forceSeek ? partitions : uncommitted);
                 }
             }
         });
@@ -126,6 +129,12 @@ public class KafkaEventSource<Key, Value> implements EventSource<Key, Value> {
         private Integer maxPollRecords;
         private KafkaReadPolicy<Key, Value> readPolicy = KafkaReadPolicies.fromBeginning();
         private Properties consumerConfig;
+        private boolean forceSeek = false;
+
+        public Builder<Key, Value> forceSeek(boolean forceSeek) {
+            this.forceSeek = forceSeek;
+            return this;
+        }
 
         public Builder<Key, Value> bootstrapServers(String bootstrapServers) {
             this.bootstrapServers = bootstrapServers;
@@ -200,7 +209,7 @@ public class KafkaEventSource<Key, Value> implements EventSource<Key, Value> {
                 props.putAll(consumerConfig);
             }
 
-            return new KafkaEventSource<>(props, topic, readPolicy);
+            return new KafkaEventSource<>(props, topic, readPolicy, forceSeek);
         }
     }
 }

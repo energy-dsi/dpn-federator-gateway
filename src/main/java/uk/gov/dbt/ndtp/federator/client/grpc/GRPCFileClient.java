@@ -11,13 +11,13 @@ import uk.gov.dbt.ndtp.federator.client.connection.ConnectionProperties;
 import uk.gov.dbt.ndtp.federator.client.grpc.file.FileChunkAssembler;
 import uk.gov.dbt.ndtp.federator.client.grpc.file.FileVersionFinalizer;
 import uk.gov.dbt.ndtp.federator.client.grpc.file.FileVersionPlanner;
+import uk.gov.dbt.ndtp.federator.common.checksum.ChecksumValidationReporter;
 import uk.gov.dbt.ndtp.federator.common.utils.RedisUtil;
 import uk.gov.dbt.ndtp.federator.exceptions.FileAssemblyException;
 import uk.gov.dbt.ndtp.grpc.FileChunk;
 import uk.gov.dbt.ndtp.grpc.FileStreamEvent;
 import uk.gov.dbt.ndtp.grpc.FileStreamRequest;
 import uk.gov.dbt.ndtp.grpc.StreamWarning;
-import uk.gov.dbt.ndtp.federator.common.checksum.ChecksumValidationReporter;
 
 /**
  * GRPC client responsible for streaming files from the Federator service and assembling them locally.
@@ -87,10 +87,24 @@ public class GRPCFileClient extends GRPCAbstractClient {
      * @throws FileAssemblyException if streaming or assembly encounters an unrecoverable error
      */
     public void processTopic(String topic, long offset, String destination) {
-        log.info("Processing file topic: '{}' with start_sequence_id: '{}'", topic, offset);
+        processTopic(topic, offset, destination, false);
+    }
+
+    /**
+     * As {@link #processTopic(String, long, String)}, optionally asking the server to re-seek the
+     * topic even if it already holds a committed offset for this client.
+     *
+     * @param forceReset true to request a full re-transfer regardless of server-side committed offsets
+     */
+    public void processTopic(String topic, long offset, String destination, boolean forceReset) {
+        log.info(
+                "Processing file topic: '{}' with start_sequence_id: '{}', force_reset: '{}'",
+                topic,
+                offset,
+                forceReset);
         validatePrerequisites(topic, destination);
 
-        FileStreamRequest request = buildFileStreamRequest(topic, offset);
+        FileStreamRequest request = buildFileStreamRequest(topic, offset, forceReset);
         FileChunkAssembler assembler = new FileChunkAssembler(destination, this.serverName);
 
         try {
@@ -123,10 +137,11 @@ public class GRPCFileClient extends GRPCAbstractClient {
      * @param offset sequence id to begin from
      * @return configured FileStreamRequest
      */
-    private FileStreamRequest buildFileStreamRequest(String topic, long offset) {
+    private FileStreamRequest buildFileStreamRequest(String topic, long offset, boolean forceReset) {
         return FileStreamRequest.newBuilder()
                 .setTopic(topic)
                 .setStartSequenceId(offset)
+                .setForceReset(forceReset)
                 .build();
     }
 
@@ -162,8 +177,7 @@ public class GRPCFileClient extends GRPCAbstractClient {
                     topic,
                     lastStoredSeq + 1);
         } else {
-            log.info(
-                    "No files stored for topic '{}' (empty stream or upload failure); offset not advanced.", topic);
+            log.info("No files stored for topic '{}' (empty stream or upload failure); offset not advanced.", topic);
         }
         log.info("Finished processing stream for topic '{}'", topic);
     }
@@ -224,9 +238,7 @@ public class GRPCFileClient extends GRPCAbstractClient {
     private void handleWarningEvent(String topic, StreamWarning warning) {
         saveNextOffsetToRedis(topic, warning.getSkippedSequenceId());
         log.warn(ChecksumValidationReporter.fileSkipped(
-                warning.getSkippedSequenceId(),
-                warning.getReason(),
-                warning.getDetails()));
+                warning.getSkippedSequenceId(), warning.getReason(), warning.getDetails()));
         // Behaviour preserved from the per-file implementation: a warning records the skipped sequence id
         // so upstream retry logic does not loop forever.
     }
