@@ -81,7 +81,6 @@ public class GRPCTopicClient extends GRPCAbstractClient {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("GRPClient");
     private static final String CLIENT_IDLE_TIMEOUT = "client.idleTimeout.secs";
-    private static final String FORCE_RESET_PROPERTY = "topic.exchange.force.reset";
 
     private final ChecksumMismatchAction mismatchAction; // NEW
     private static final String PLAYBOOK_URL =
@@ -161,7 +160,7 @@ public class GRPCTopicClient extends GRPCAbstractClient {
     }
 
     public void processTopic(String topic, long offset) {
-        processTopic(topic, offset, PropertyUtil.getPropertyBooleanValue(FORCE_RESET_PROPERTY, "true"));
+        processTopic(topic, offset, true);
     }
 
     /**

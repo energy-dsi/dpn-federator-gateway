@@ -226,30 +226,24 @@ class GRPCTopicClientTest {
     }
 
     @Test
-    void processTopic_twoArgument_followsTheConfiguredOptOut() {
+    void processTopic_twoArgument_alwaysRequestsForceReset() {
         ManagedChannel channel = mock(ManagedChannel.class);
         when(channel.shutdown()).thenReturn(channel);
         KafkaSink<Bytes, Bytes> sink = mock(KafkaSink.class);
         RedisUtil redis = mock(RedisUtil.class);
-        // built before PropertyUtil is mocked, so the constructor's own property reads are unaffected
         GRPCTopicClient client = spy(new GRPCTopicClient("client", "key", "server", "pref", channel));
         doNothing().when(client).consumeMessagesAndSendOn(any(), any());
         org.mockito.ArgumentCaptor<TopicRequest> captor = org.mockito.ArgumentCaptor.forClass(TopicRequest.class);
 
         try (MockedStatic<KafkaUtil> kafkaMock = mockStatic(KafkaUtil.class);
-                MockedStatic<RedisUtil> redisMock = mockStatic(RedisUtil.class);
-                MockedStatic<uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil> props =
-                        mockStatic(uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil.class)) {
+                MockedStatic<RedisUtil> redisMock = mockStatic(RedisUtil.class)) {
             kafkaMock.when(() -> KafkaUtil.getKafkaSink(anyString())).thenReturn(sink);
             redisMock.when(RedisUtil::getKeycloakGatedInstance).thenReturn(redis);
-            props.when(() -> uk.gov.dbt.ndtp.federator.common.utils.PropertyUtil.getPropertyBooleanValue(
-                            "topic.exchange.force.reset", "true"))
-                    .thenReturn(false);
 
             client.processTopic("topic", 0L);
 
             verify(client).consumeMessagesAndSendOn(captor.capture(), eq(sink));
-            assertEquals(false, captor.getValue().getForceReset());
+            assertEquals(true, captor.getValue().getForceReset());
         }
         client.close();
     }

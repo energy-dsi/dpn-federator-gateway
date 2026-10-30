@@ -24,7 +24,6 @@ import uk.gov.dbt.ndtp.federator.exceptions.ClientGRPCJobException;
 public class ClientGRPCFileExchangeJob implements Job {
 
     private static final String KAFKA_TOPIC_PREFIX = ".topic.prefix";
-    private static final String FORCE_RESET_PROPERTY = "file.exchange.force.reset";
     private Supplier<String> prefixSupplier;
     private ClientFileExchangeGRPCJobParams request;
     private ToLongBiFunction<String, String> offsetProvider;
@@ -95,11 +94,9 @@ public class ClientGRPCFileExchangeJob implements Job {
                         new GRPCFileClient(request.getConnectionProperties(), prefixSupplier.get())) {
             long offset = offsetProvider.applyAsLong(grpcClient.getRedisPrefix(), topic);
             log.info("offset:{} , topic:{}", offset, topic);
-            // Always on by default: the client's stored (Redis) offset decides what is sent, so a
-            // cleared cache re-sends every file and an intact cache sends only new files. Set
-            // file.exchange.force.reset=false to fall back to the server's committed-offset guard.
-            boolean forceReset = PropertyUtil.getPropertyBooleanValue(FORCE_RESET_PROPERTY, "true");
-            grpcClient.processTopic(topic, offset, destinationPath, forceReset);
+            // The client's stored (Redis) offset always decides what is sent: a cleared cache
+            // re-sends every file and an intact cache sends only new files.
+            grpcClient.processTopic(topic, offset, destinationPath, true);
         } catch (Exception e) {
             span.recordException(e);
             span.setStatus(StatusCode.ERROR, e.getMessage());
