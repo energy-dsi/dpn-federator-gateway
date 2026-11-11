@@ -1,0 +1,292 @@
+trigger: none
+
+# =============================================================================
+# Shared DPN — Federator Server + Client Rollback Pipeline (N instances)
+#
+# Helm-rolls back the SHARED DPN federator releases dpn-platform-02 .. dpn-platform-<N>.
+# The primary release (dpn-platform) is NEVER touched.
+#
+# totalDpnCount = how many DPNs in total, INCLUDING the primary:
+#   3 -> rolls back dpn-platform-02 and dpn-platform-03
+#
+# Revisions: leave `revisions` empty to roll EVERY instance back to its previous
+# stable revision, or pin some instances, e.g. "02=5,03=7" (instances not listed
+# use their previous stable revision). Only deployed/superseded revisions are
+# allowed. All target revisions are validated before any rollback runs.
+# =============================================================================
+
+pool:
+  name: <<YOUR AGENT POOL>>
+
+parameters:
+- name: ServiceConnection
+  displayName: 'ServiceConnection details'
+  type: string
+  default: 'sc-dpn-dev-001'
+  values:
+      - sc-dpn-dev-001
+      - sc-dpn-dev-002
+      - sc-dpn-test-001
+      - sc-dpn-test-002
+      - sc-dpn-pdev-ppd-001
+      - sc-dpn-ptest-ppd-001
+      - sc-dpn-puat-ppd-001
+
+- name: environment
+  displayName: Environment Name
+  type: string
+  default: 'dev'
+  values:
+      - dev
+      - devtest
+      - test
+      - pdev
+      - ptest
+      - puat
+
+- name: dpncluster
+  displayName: "Target DPN Cluster"
+  type: string
+  default: 'dpn01'
+  values:
+    - dpn01
+    - dpn02
+
+- name: totalDpnCount
+  displayName: "Total DPNs INCLUDING the primary (e.g. 3 = primary + shared 02, 03). Minimum 2. Rolls back shared federators 02..N only"
+  type: number
+  default: 2
+
+- name: revisions
+  displayName: "Optional target revisions per instance, e.g. 02=5,03=7 (blank / unlisted = previous stable revision)"
+  type: string
+  default: " "
+
+variables:
+  # Shared instance N release = $(RELEASE_PREFIX)-0N (see shared-federator-cd.yaml)
+  - name: RELEASE_PREFIX
+    value: dpn-platform
+
+  - name: TOTAL_DPN
+    value: "${{ parameters.totalDpnCount }}"
+
+  - name: PARAMETERS_FILE
+    value: .pipelines/azure-pipelines/config/${{ parameters.environment }}-${{ parameters.dpncluster }}.json
+
+  # Approval group routing, shared across all DPN CD pipelines.
+  - ${{ if or(eq(parameters.environment, 'pdev'), eq(parameters.environment, 'ptest'), eq(parameters.environment, 'puat')) }}:
+    - name: APPROVAL_GROUP
+      value: dsi-ppd
+  - ${{ elseif or(eq(parameters.environment, 'devtest'), eq(parameters.environment, 'test')) }}:
+    - name: APPROVAL_GROUP
+      value: dsi-devtest
+  - ${{ else }}:
+    - name: APPROVAL_GROUP
+      value: dsi-dev
+
+stages:
+
+# -----------------------------------------------------
+# Guard (single-DPN environments + instance count + revisions format)
+# -----------------------------------------------------
+- stage: Guard
+  displayName: "Guard — DPN Cluster + Instance Count"
+  jobs:
+  - job: Guard
+    steps:
+    - checkout: none
+    - script: |
+        ENV="${{ parameters.environment }}"
+        CLUSTER="${{ parameters.dpncluster }}"
+        if printf '%s' "$ENV" | grep -qE '^(pdev|ptest|puat)$' && [ "$CLUSTER" = "dpn02" ]; then
+          echo "##[error]dpncluster=dpn02 is disabled for environment=$ENV. This environment only has dpn01."
+          exit 1
+        fi
+        TOTAL="$(TOTAL_DPN)"
+        if ! [[ "$TOTAL" =~ ^[0-9]+$ ]] || [ "$TOTAL" -lt 2 ]; then
+          echo "##[error]totalDpnCount must be 2 or more (it counts the primary): got '$TOTAL'."
+          exit 1
+        fi
+        REVS="$(echo '${{ parameters.revisions }}' | tr -d '[:space:]')"
+        if [ -n "$REVS" ] && ! printf '%s' "$REVS" | grep -qE '^[0-9]{2,}=[0-9]+(,[0-9]{2,}=[0-9]+)*$'; then
+          echo "##[error]revisions must look like 02=5,03=7 — got '${{ parameters.revisions }}'."
+          exit 1
+        fi
+        echo "Guard passed: '$ENV' / '$CLUSTER', releases $(RELEASE_PREFIX)-02..$(printf '%02d' "$TOTAL")."
+      displayName: "Validate DPN cluster + totalDpnCount + revisions"
+
+# -----------------------------------------------------
+# Discover Revisions (every shared instance)
+# -----------------------------------------------------
+- stage: DiscoverRevisions
+  dependsOn: Guard
+  condition: succeeded()
+  jobs:
+  - job: ShowRevisions
+    steps:
+    - script: |
+        CONFIG_FILE="$(Build.SourcesDirectory)/$(PARAMETERS_FILE)"
+        for key in $(jq -r 'keys_unsorted | .[]' "$CONFIG_FILE"); do
+          echo "##vso[task.setvariable variable=$key]$(jq -r ".\"$key\"" "$CONFIG_FILE")"
+        done
+      displayName: Load Environment Config
+
+    - task: AzureCLI@2
+      name: setRevisions
+      displayName: "Fetch Last 5 Helm Revisions per Instance"
+      inputs:
+        azureSubscription: '${{ parameters.ServiceConnection }}'
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          set -euo pipefail
+
+          if ! command -v kubectl &>/dev/null || ! command -v kubelogin &>/dev/null; then
+            az aks install-cli --client-version 1.32.3 --kubelogin-version 0.2.18
+          fi
+          helm version >/dev/null
+
+          az account set --subscription $(AZURE_SUBSCRIPTION_ID)
+          az aks get-credentials \
+            --resource-group $(RESOURCE_GROUP) \
+            --name $(AKS_CLUSTER) \
+            --overwrite-existing
+          kubelogin convert-kubeconfig -l azurecli
+
+          REV_LIST=""
+          MISSING=0
+          for i in $(seq 2 $(TOTAL_DPN)); do
+            RELEASE="$(RELEASE_PREFIX)-$(printf '%02d' "$i")"
+            if ! helm status "$RELEASE" -n $(NAMESPACE) >/dev/null 2>&1; then
+              echo "##[error]$RELEASE is not installed in $(NAMESPACE) — nothing to roll back."
+              MISSING=1
+              continue
+            fi
+            ENTRIES=$(helm history "$RELEASE" -n $(NAMESPACE) -o json | jq -r '
+              .[-5:][] |
+              "  Revision: \(.revision) | Status: \(.status) | Updated: \(.updated)"
+            ')
+            REV_LIST="${REV_LIST}${RELEASE}:"$'\n'"${ENTRIES}"$'\n'
+          done
+
+          echo "Last 5 revisions per shared instance:"
+          echo "$REV_LIST"
+          [ "$MISSING" -eq 0 ] || exit 1
+
+          REV_LIST_ESCAPED=$(echo "$REV_LIST" | sed ':a;N;$!ba;s/\n/%0A/g')
+          echo "##vso[task.setvariable variable=revision_list;isOutput=true]$REV_LIST_ESCAPED"
+
+# -----------------------------------------------------
+# Approval
+# -----------------------------------------------------
+- stage: Approval
+  dependsOn: DiscoverRevisions
+
+  variables:
+    revision_list: $[ stageDependencies.DiscoverRevisions.ShowRevisions.outputs['setRevisions.revision_list'] ]
+
+  jobs:
+  - job: WaitForSelection
+    pool: server
+    steps:
+    - task: ManualValidation@0
+      inputs:
+        instructions: |
+          Shared DPN federator rollback — dpn-platform-02..${{ parameters.totalDpnCount }}
+
+          Last 5 Helm revisions:
+
+          $(revision_list)
+
+          Target revisions (pipeline parameter): ${{ parameters.revisions }}
+          Instances not listed roll back to their previous stable revision.
+
+          Only deployed or superseded revisions are allowed.
+
+# -----------------------------------------------------
+# Rollback (validate every target first, then roll back one by one)
+# -----------------------------------------------------
+- stage: Rollback
+  dependsOn: Approval
+  jobs:
+  - deployment: RollbackJob
+    environment: ${{ variables.APPROVAL_GROUP }}
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - checkout: self
+
+          - script: |
+              CONFIG_FILE="$(Build.SourcesDirectory)/$(PARAMETERS_FILE)"
+              for key in $(jq -r 'keys_unsorted | .[]' "$CONFIG_FILE"); do
+                echo "##vso[task.setvariable variable=$key]$(jq -r ".\"$key\"" "$CONFIG_FILE")"
+              done
+            displayName: Load Environment Config
+
+          - task: AzureCLI@2
+            displayName: "Execute Safe Rollback per Instance"
+            inputs:
+              azureSubscription: '${{ parameters.ServiceConnection }}'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -euo pipefail
+
+                if ! command -v kubectl &>/dev/null || ! command -v kubelogin &>/dev/null; then
+                  az aks install-cli --client-version 1.32.3 --kubelogin-version 0.2.18
+                fi
+                helm version >/dev/null
+
+                az account set --subscription $(AZURE_SUBSCRIPTION_ID)
+                az aks get-credentials \
+                  --resource-group $(RESOURCE_GROUP) \
+                  --name $(AKS_CLUSTER) \
+                  --overwrite-existing
+                kubelogin convert-kubeconfig -l azurecli
+
+                REVS="$(echo '${{ parameters.revisions }}' | tr -d '[:space:]')"
+
+                # Pass 1 — resolve + validate every target revision; nothing is rolled back
+                # unless all of them are valid.
+                declare -A TARGET
+                for i in $(seq 2 $(TOTAL_DPN)); do
+                  N=$(printf '%02d' "$i")
+                  RELEASE="$(RELEASE_PREFIX)-$N"
+                  REV=$(printf '%s' "$REVS" | tr ',' '\n' | sed -n "s/^$N=//p" | head -1)
+                  HISTORY=$(helm history "$RELEASE" -n $(NAMESPACE) -o json)
+                  if [ -z "$REV" ]; then
+                    REV=$(echo "$HISTORY" | jq -r '
+                      map(select(.status=="deployed" or .status=="superseded")) | .[-2].revision // empty
+                    ')
+                    if [ -z "$REV" ]; then
+                      echo "##[error]$RELEASE has no previous stable revision to roll back to."
+                      exit 1
+                    fi
+                    echo "$RELEASE: no revision given, previous stable = $REV"
+                  fi
+                  STATUS=$(echo "$HISTORY" | jq -r ".[] | select(.revision == ($REV|tonumber)) | .status")
+                  if [[ "$STATUS" != "deployed" && "$STATUS" != "superseded" ]]; then
+                    echo "##[error]Rollback blocked: $RELEASE revision $REV has status '${STATUS:-not found}'."
+                    exit 1
+                  fi
+                  echo "$RELEASE -> revision $REV ($STATUS)"
+                  TARGET[$N]=$REV
+                  helm rollback "$RELEASE" "$REV" -n $(NAMESPACE) --dry-run >/dev/null
+                done
+
+                # Pass 2 — roll back instance by instance
+                for i in $(seq 2 $(TOTAL_DPN)); do
+                  N=$(printf '%02d' "$i")
+                  RELEASE="$(RELEASE_PREFIX)-$N"
+                  echo "================================================="
+                  echo " ROLLING BACK $RELEASE TO REVISION ${TARGET[$N]}"
+                  echo "================================================="
+                  helm rollback "$RELEASE" "${TARGET[$N]}" \
+                    -n $(NAMESPACE) \
+                    --wait \
+                    --timeout 10m
+                  kubectl rollout status deployment/dpn-federator-server-$i -n $(NAMESPACE) --timeout=300s
+                  kubectl rollout status deployment/dpn-federator-client-$i -n $(NAMESPACE) --timeout=300s
+                  helm history "$RELEASE" -n $(NAMESPACE) | tail -n 3
+                done

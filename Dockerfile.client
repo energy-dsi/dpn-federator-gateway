@@ -1,0 +1,112 @@
+# syntax=docker/dockerfile:1.4
+
+# =====================================================
+# 1) BUILD STAGE (Maven + Java 21)
+# =====================================================
+ARG BASE_REGISTRY
+FROM ${BASE_REGISTRY}/maven:3.9.6-eclipse-temurin-21 AS build
+
+WORKDIR /build
+
+ARG GITHUB_MAVEN_USERNAME
+ARG GITHUB_MAVEN_TOKEN
+
+RUN mkdir -p /root/.m2
+
+RUN cat > /root/.m2/settings.xml <<EOF
+<settings xmlns="http://maven.apache.org/SETTINGS/1.2.0">
+  <servers>
+    <server>
+      <id>github</id>
+      <username>${GITHUB_MAVEN_USERNAME}</username>
+      <password>${GITHUB_MAVEN_TOKEN}</password>
+    </server>
+  </servers>
+
+  <profiles>
+    <profile>
+      <id>github</id>
+      <repositories>
+        <repository>
+          <id>central</id>
+          <url>https://repo1.maven.org/maven2</url>
+        </repository>
+        <repository>
+          <id>github</id>
+          <url>https://maven.pkg.github.com/National-Node-Net/*</url>
+        </repository>
+      </repositories>
+    </profile>
+  </profiles>
+
+  <activeProfiles>
+    <activeProfile>github</activeProfile>
+  </activeProfiles>
+</settings>
+EOF
+
+COPY pom.xml .
+RUN mvn -B dependency:go-offline
+
+COPY src ./src
+RUN mvn -B clean package -DskipTests
+
+
+
+# =====================================================
+# 2) FEDERATOR CLIENT RUNTIME
+# =====================================================
+FROM ${BASE_REGISTRY}/eclipse-temurin:21 AS federator
+
+# CVE-2026-45447 (High, openssl/libssl3t64 on ubuntu:noble): the base image layer can be
+# stale by build time, so upgrade explicitly rather than relying on the cached base layer.
+RUN apt-get update \
+ && apt-get upgrade -y openssl libssl3t64 \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN mkdir -p /library /app \
+ && useradd -Mg root federator-service \
+ && chown federator-service /library /app
+
+WORKDIR /app
+USER federator-service
+
+COPY --from=build /build/target/*client*.jar /app/app.jar
+
+ENV PROPERTIES=""
+ENV ARGS=""
+
+ENTRYPOINT ["sh","-c","java $PROPERTIES -cp /app/app.jar:/library/* uk.gov.dbt.ndtp.federator.FederatorClient $ARGS"]
+
+
+
+# =====================================================
+# 3) MSK VARIANT (Optional Target)
+# =====================================================
+FROM ${BASE_REGISTRY}/eclipse-temurin:21 AS federator-msk
+
+RUN mkdir -p /library /app /baked-library \
+ && useradd -Mg root federator-service \
+ && chown federator-service /library /app /baked-library
+
+WORKDIR /app
+
+COPY --from=build /build/target/*client*.jar /app/app.jar
+
+ARG MSK_VERSION=2.3.7
+
+USER root
+# CVE-2026-45447 (High): upgrade OpenSSL alongside the existing apt-get call.
+RUN apt-get update && apt-get install -y curl && apt-get upgrade -y openssl libssl3t64 \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN curl -L \
+  -o /baked-library/aws-msk-iam-auth-${MSK_VERSION}-all.jar \
+  https://github.com/aws/aws-msk-iam-auth/releases/download/v${MSK_VERSION}/aws-msk-iam-auth-${MSK_VERSION}-all.jar
+
+USER federator-service
+
+ENV PROPERTIES=""
+ENV ARGS=""
+
+ENTRYPOINT ["sh","-c","java $PROPERTIES -cp /baked-library/*:/library/*:/app/app.jar uk.gov.dbt.ndtp.federator.FederatorClient $ARGS"]

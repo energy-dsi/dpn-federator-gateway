@@ -1,0 +1,199 @@
+trigger: none
+
+# =============================================================================
+# Shared DPN — Federator Server + Client Uninstall Pipeline (N instances)
+#
+# Helm uninstalls the SHARED DPN federator releases dpn-platform-02 .. dpn-platform-<N>.
+# The primary release (dpn-platform: Kafka, ZooKeeper, Kafka UI, Redis, primary
+# federator server/client) is NEVER touched — use azure-dpn-uninstall-cd.yaml.
+#
+# totalDpnCount = how many DPNs in total, INCLUDING the primary:
+#   3 -> uninstalls dpn-platform-02 and dpn-platform-03
+# Each release only holds that instance's federator server/client Deployments,
+# Services and common-config ConfigMaps, so nothing shared is removed.
+# =============================================================================
+
+pool:
+  name: <<YOUR AGENT POOL>>
+
+parameters:
+- name: ServiceConnection
+  displayName: 'ServiceConnection details'
+  type: string
+  default: 'sc-dpn-dev-001'
+  values:
+      - sc-dpn-dev-001
+      - sc-dpn-dev-002
+      - sc-dpn-test-001
+      - sc-dpn-test-002
+      - sc-dpn-pdev-ppd-001
+      - sc-dpn-ptest-ppd-001
+      - sc-dpn-puat-ppd-001
+
+- name: environment
+  displayName: Environment Name
+  type: string
+  default: 'dev'
+  values:
+      - dev
+      - devtest
+      - test
+      - pdev
+      - ptest
+      - puat
+
+- name: dpncluster
+  displayName: "Target DPN Cluster"
+  type: string
+  default: 'dpn01'
+  values:
+    - dpn01
+    - dpn02
+
+- name: totalDpnCount
+  displayName: "Total DPNs INCLUDING the primary (e.g. 3 = primary + shared 02, 03). Minimum 2. Uninstalls shared federators 02..N only"
+  type: number
+  default: 2
+
+variables:
+  # Shared instance N release = $(RELEASE_PREFIX)-0N (see shared-federator-cd.yaml)
+  - name: RELEASE_PREFIX
+    value: dpn-platform
+
+  - name: TOTAL_DPN
+    value: "${{ parameters.totalDpnCount }}"
+
+  - name: PARAMETERS_FILE
+    value: .pipelines/azure-pipelines/config/${{ parameters.environment }}-${{ parameters.dpncluster }}.json
+
+  # Approval group routing, shared across all DPN CD pipelines.
+  - ${{ if or(eq(parameters.environment, 'pdev'), eq(parameters.environment, 'ptest'), eq(parameters.environment, 'puat')) }}:
+    - name: APPROVAL_GROUP
+      value: dsi-ppd
+  - ${{ elseif or(eq(parameters.environment, 'devtest'), eq(parameters.environment, 'test')) }}:
+    - name: APPROVAL_GROUP
+      value: dsi-devtest
+  - ${{ else }}:
+    - name: APPROVAL_GROUP
+      value: dsi-dev
+
+stages:
+
+# -----------------------------------------------------
+# Guard (single-DPN environments + instance count)
+# -----------------------------------------------------
+- stage: Guard
+  displayName: "Guard — DPN Cluster + Instance Count"
+  jobs:
+  - job: Guard
+    steps:
+    - checkout: none
+    - script: |
+        ENV="${{ parameters.environment }}"
+        CLUSTER="${{ parameters.dpncluster }}"
+        if printf '%s' "$ENV" | grep -qE '^(pdev|ptest|puat)$' && [ "$CLUSTER" = "dpn02" ]; then
+          echo "##[error]dpncluster=dpn02 is disabled for environment=$ENV. This environment only has dpn01."
+          exit 1
+        fi
+        TOTAL="$(TOTAL_DPN)"
+        if ! [[ "$TOTAL" =~ ^[0-9]+$ ]] || [ "$TOTAL" -lt 2 ]; then
+          echo "##[error]totalDpnCount must be 2 or more (it counts the primary): got '$TOTAL'."
+          exit 1
+        fi
+        echo "Guard passed: '$ENV' / '$CLUSTER', releases $(RELEASE_PREFIX)-02..$(printf '%02d' "$TOTAL")."
+      displayName: "Validate DPN cluster + totalDpnCount"
+
+# -----------------------------------------------------
+# Approval
+# -----------------------------------------------------
+- stage: Approval
+  displayName: "Approval Gate"
+  dependsOn: Guard
+  condition: succeeded()
+  jobs:
+  - deployment: ApprovalJob
+    environment: ${{ variables.APPROVAL_GROUP }}
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - script: |
+              echo "===================================================="
+              echo " APPROVAL REQUIRED BEFORE SHARED DPN FEDERATOR UNINSTALL"
+              echo "===================================================="
+              echo "Environment : ${{ parameters.environment }} / ${{ parameters.dpncluster }}"
+              echo "Releases    : $(for i in $(seq 2 $(TOTAL_DPN)); do printf 'dpn-platform-%02d ' "$i"; done)"
+              echo "Primary dpn-platform release is NOT touched."
+              echo "===================================================="
+
+# -----------------------------------------------------
+# Uninstall
+# -----------------------------------------------------
+- stage: Uninstall
+  displayName: "Uninstall Shared Federators [${{ parameters.environment }}-${{ parameters.dpncluster }}]"
+  dependsOn: Approval
+  condition: succeeded()
+  jobs:
+  - deployment: UninstallJob
+    displayName: "Helm Uninstall (02..${{ parameters.totalDpnCount }})"
+    environment: ${{ variables.APPROVAL_GROUP }}
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - checkout: self
+
+          - script: |
+              echo "Loading config: $(PARAMETERS_FILE)"
+              for param in $(jq -r 'keys_unsorted | .[]' "$(Build.SourcesDirectory)/$(PARAMETERS_FILE)"); do
+                value=$(jq -r ".\"$param\"" "$(Build.SourcesDirectory)/$(PARAMETERS_FILE)")
+                echo "##vso[task.setvariable variable=$param]$value"
+              done
+            displayName: Load Environment Config
+
+          - task: AzureCLI@2
+            displayName: "Helm Uninstall — shared federators"
+            inputs:
+              azureSubscription: '${{ parameters.ServiceConnection }}'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -euo pipefail
+
+                if ! command -v kubectl &>/dev/null || ! command -v kubelogin &>/dev/null; then
+                  az aks install-cli --client-version 1.32.3 --kubelogin-version 0.2.18
+                fi
+                helm version >/dev/null
+
+                az account set --subscription $(AZURE_SUBSCRIPTION_ID)
+                az aks get-credentials \
+                  --resource-group $(RESOURCE_GROUP) \
+                  --name $(AKS_CLUSTER) \
+                  --overwrite-existing
+                kubelogin convert-kubeconfig -l azurecli
+
+                for i in $(seq 2 $(TOTAL_DPN)); do
+                  RELEASE="$(RELEASE_PREFIX)-$(printf '%02d' "$i")"
+                  if helm status "$RELEASE" -n $(NAMESPACE) >/dev/null 2>&1; then
+                    echo "Uninstalling: $RELEASE"
+                    helm uninstall "$RELEASE" -n $(NAMESPACE) --wait --timeout 5m
+                    echo "$RELEASE uninstalled successfully"
+                  else
+                    echo "$RELEASE not found in $(NAMESPACE) — skipping"
+                  fi
+                done
+
+                echo "Remaining Helm releases in $(NAMESPACE):"
+                helm list -n $(NAMESPACE)
+
+                LEFT=0
+                for i in $(seq 2 $(TOTAL_DPN)); do
+                  for d in dpn-federator-server-$i dpn-federator-client-$i; do
+                    if kubectl get deployment $d -n $(NAMESPACE) >/dev/null 2>&1; then
+                      echo "##[error]deployment/$d still exists"
+                      LEFT=1
+                    fi
+                  done
+                done
+                [ "$LEFT" -eq 0 ] || exit 1
+                echo "Shared DPN federators removed."

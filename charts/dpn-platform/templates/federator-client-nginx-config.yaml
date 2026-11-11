@@ -1,0 +1,84 @@
+{{- if .Values.federatorClient.nginxSidecar.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: federator-client-nginx-config
+  namespace: {{ .Release.Namespace }}
+data:
+  # Overwrites the stock nginx image's default.conf exactly (same filename), so only this
+  # server block loads - no unused default server left listening on port 80 alongside it.
+  default.conf: |
+    server {
+        listen {{ .Values.federatorClient.service.jobRunnerPort }} ssl;
+
+        ssl_certificate     /etc/nginx/tls/tls.crt;
+        ssl_certificate_key /etc/nginx/tls/tls.key;
+        ssl_protocols TLSv1.2 TLSv1.3;
+
+        # Mirrors JobRunnerAuthGateway.FAVICON_PATH: a bare 404, never proxied, so a browser's
+        # automatic favicon fetch can never kick off its own OIDC login/state-cookie flow that
+        # races the real page's.
+        location = /favicon.ico {
+            return 404;
+        }
+
+        # Mirrors JobRunnerAuthGateway.PUBLIC_ASSET_SUFFIXES: served with no auth check at all.
+        # A suffix match (not exact), same as the Java check it mirrors, since the dashboard may
+        # serve this under a sub-path rather than exactly at the root.
+        location ~ /manifest\.json$ {
+            proxy_pass http://127.0.0.1:{{ .Values.federatorClient.service.jobRunnerInternalPort }};
+            include /etc/nginx/proxy_common.conf;
+        }
+
+        # OIDC callback (jobs.dashboard.auth.oidc.redirect.path in federator-client-config.yaml) -
+        # only the Java auth gateway can complete the code exchange and set the resulting cookies.
+        location = /oauth2/callback {
+            proxy_pass http://127.0.0.1:{{ .Values.federatorClient.service.jobRunnerAuthPort }};
+            include /etc/nginx/proxy_common.conf;
+        }
+
+        # Fast-path auth check: a currently-valid token (the common case within one browser
+        # session/page-load burst) resolves here cheaply, with no body, never touching either
+        # Java HTTP server for the actual response below. See JobRunnerAuthGateway.verify().
+        location = /_verify {
+            internal;
+            proxy_pass http://127.0.0.1:{{ .Values.federatorClient.service.jobRunnerAuthPort }}/verify;
+            proxy_pass_request_body off;
+            proxy_set_header Content-Length "";
+            proxy_set_header X-Original-Method $request_method;
+            proxy_set_header Cookie $http_cookie;
+            proxy_set_header Authorization $http_authorization;
+        }
+
+        location / {
+            auth_request /_verify;
+            # Anything the fast check doesn't accept (missing/expired token, needs a silent
+            # refresh, needs a fresh login) falls through to the full, unchanged Java auth
+            # gateway, which still does all of that exactly as before - it's just no longer in
+            # the hot path for a routine page-load burst once a session is already established,
+            # which is what was overwhelming it. See JobRunnerAuthGateway.verify() javadoc.
+            error_page 401 403 = @full_auth_gateway;
+
+            proxy_pass http://127.0.0.1:{{ .Values.federatorClient.service.jobRunnerInternalPort }};
+            include /etc/nginx/proxy_common.conf;
+        }
+
+        location @full_auth_gateway {
+            proxy_pass http://127.0.0.1:{{ .Values.federatorClient.service.jobRunnerAuthPort }};
+            include /etc/nginx/proxy_common.conf;
+        }
+    }
+  proxy_common.conf: |
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    # Authorization and Cookie headers pass through to the upstream unchanged by default -
+    # nginx only hides a small fixed set of hop-by-hop headers, neither of which is in it.
+    # SSE: JobRunr's live-update streams must not be buffered or cut off by a read timeout.
+    proxy_buffering off;
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+{{- end }}

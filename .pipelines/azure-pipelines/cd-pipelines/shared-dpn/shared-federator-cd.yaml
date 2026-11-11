@@ -1,0 +1,487 @@
+trigger: none
+
+# =============================================================================
+# Shared DPN — Federator Server + Client CD Pipeline (N instances)
+#
+# Deploys the SHARED DPN federator server/client pairs into their own Helm
+# releases dpn-platform-02 .. dpn-platform-<N>. The primary release (dpn-platform:
+# Kafka, ZooKeeper, Kafka UI, Redis, primary federator server/client) is NEVER
+# touched — it is deployed by azure-dpn-cd.yaml.
+#
+# totalDpnCount = how many DPNs in total, INCLUDING the primary:
+#   2 -> primary + 02             (deploys dpn-platform-02)
+#   3 -> primary + 02, 03         (deploys dpn-platform-02, dpn-platform-03)
+#
+# Every shared instance needs its own overlay, layered on top of the primary file:
+#   charts/dpn-platform/values-<env>-<cluster>.yaml      (primary, base layer)
+#   charts/dpn-platform/values-<env>-<cluster>-0N.yaml   (instance 0N overlay)
+# The pipeline first checks ALL overlays 02..N exist, that each sets
+# federatorServer.name dpn-federator-server-N / federatorClient.name
+# dpn-federator-client-N, and that no <PLACEHOLDER-...> is left — and exits
+# before deploying anything if not.
+#
+# Vault wiring check (Validate, every instance, before anything deploys):
+# .pipelines/scripts/shared-dpn-wiring-check.sh inspects the rendered release and
+# fails unless federator server/client N use ONLY dpn-vault-https-0N and Secret
+# certificate-manager-0N-secrets, with the SAME client id and role id as the live
+# dpn-certificate-manager-0N (ConfigMap dpn-certificate-manager-0N-config).
+#
+# The chart templates only know about one instance, so each release is installed
+# from a copy of the chart holding just the federator server/client templates
+# (Deployments, Services, LB Service, common-config ConfigMaps). Each instance
+# renders its own common-config ConfigMaps named <instance-name>-common-config
+# (idp.client.id etc. from the overlay). Kafka, Redis, ZooKeeper, the other
+# ConfigMaps and secrets are the primary's, shared by all instances.
+#
+# Prerequisites: primary azure-dpn-cd deployed; for each instance 0N the
+# certificate-manager pipelines run (dpn-vault-https-0N, certificate-manager-0N-secrets).
+# =============================================================================
+
+pool:
+  name: '<<YOUR AGENT POOL>>'
+
+parameters:
+- name: ServiceConnection
+  displayName: 'ServiceConnection details'
+  type: string
+  default: 'sc-dpn-dev-001'
+  values:
+      - sc-dpn-dev-001
+      - sc-dpn-dev-002
+      - sc-dpn-test-001
+      - sc-dpn-test-002
+      - sc-dpn-pdev-ppd-001
+      - sc-dpn-ptest-ppd-001
+      - sc-dpn-puat-ppd-001
+
+- name: environment
+  displayName: Environment Name
+  type: string
+  default: 'dev'
+  values:
+      - dev
+      - devtest
+      - test
+      - pdev
+      - ptest
+      - puat
+
+- name: dpncluster
+  displayName: Target DPN Cluster
+  type: string
+  default: 'dpn01'
+  values:
+    - dpn01
+    - dpn02
+
+- name: totalDpnCount
+  displayName: "Total DPNs INCLUDING the primary (e.g. 3 = primary + shared 02, 03). Minimum 2. Deploys shared federator server/client 02..N only"
+  type: number
+  default: 2
+
+- name: imageTag
+  type: string
+  displayName: Federator Image tag
+
+variables:
+  - name: HELM_DIR
+    value: charts/dpn-platform
+
+  # Shared instance N release = $(RELEASE_PREFIX)-0N
+  - name: RELEASE_PREFIX
+    value: dpn-platform
+
+  - name: VALUES_FILE
+    value: values-${{ parameters.environment }}-${{ parameters.dpncluster }}.yaml
+
+  # Instance overlay = $(HELM_DIR)/$(VALUES_PREFIX)-0N.yaml
+  - name: VALUES_PREFIX
+    value: values-${{ parameters.environment }}-${{ parameters.dpncluster }}
+
+  - name: TOTAL_DPN
+    value: "${{ parameters.totalDpnCount }}"
+
+  - name: PARAMETERS_FILE
+    value: .pipelines/azure-pipelines/config/${{ parameters.environment }}-${{ parameters.dpncluster }}.json
+
+  # Approval group routing, shared across all DPN CD pipelines.
+  - ${{ if or(eq(parameters.environment, 'pdev'), eq(parameters.environment, 'ptest'), eq(parameters.environment, 'puat')) }}:
+    - name: APPROVAL_GROUP
+      value: dsi-ppd
+  - ${{ elseif or(eq(parameters.environment, 'devtest'), eq(parameters.environment, 'test')) }}:
+    - name: APPROVAL_GROUP
+      value: dsi-devtest
+  - ${{ else }}:
+    - name: APPROVAL_GROUP
+      value: dsi-dev
+
+stages:
+
+# -----------------------------------------------------
+# Validate — values files + pre-flight + lint/dry-run for every instance
+# -----------------------------------------------------
+- stage: Validate
+  displayName: "Validate Shared DPN [${{ parameters.environment }}-${{ parameters.dpncluster }}] x 02..${{ parameters.totalDpnCount }}"
+  jobs:
+  - job: Validate
+    displayName: "Values Check + Helm Dry Run"
+    steps:
+    - checkout: self
+
+    # pdev, ptest and puat only run a single DPN (dpn01).
+    - ${{ if or(eq(parameters.environment, 'pdev'), eq(parameters.environment, 'ptest'), eq(parameters.environment, 'puat')) }}:
+      - script: |
+          if [ "${{ parameters.dpncluster }}" == "dpn02" ]; then
+            echo "##[error]dpncluster=dpn02 is disabled for environment=${{ parameters.environment }}. This environment only has dpn01."
+            exit 1
+          fi
+        displayName: "Guard: dpn02 disabled for ${{ parameters.environment }}"
+
+    - script: |
+        set -uo pipefail
+        TOTAL="$(TOTAL_DPN)"
+        if ! [[ "$TOTAL" =~ ^[0-9]+$ ]] || [ "$TOTAL" -lt 2 ]; then
+          echo "##[error]totalDpnCount must be 2 or more (it counts the primary): got '$TOTAL'."
+          echo "##[error]Example: 3 = primary + shared 02, 03."
+          exit 1
+        fi
+        if [ ! -f "$(HELM_DIR)/$(VALUES_FILE)" ]; then
+          echo "##[error]Primary values file not present: $(HELM_DIR)/$(VALUES_FILE) — so exiting."
+          exit 1
+        fi
+        echo "Primary (base) values file : $(HELM_DIR)/$(VALUES_FILE)"
+        echo "Shared instances requested : 02..$(printf '%02d' "$TOTAL") ($((TOTAL - 1)) instance(s))"
+
+        # name: under the given top-level section of a values file
+        section_name() { awk -v s="^$1:" '$0 ~ s {f=1; next} f && /^[^[:space:]#]/ {f=0} f && $1=="name:" {gsub(/"/,"",$2); print $2; exit}' "$2"; }
+
+        FAILED=0
+        for i in $(seq 2 "$TOTAL"); do
+          N=$(printf '%02d' "$i")
+          F="$(HELM_DIR)/$(VALUES_PREFIX)-$N.yaml"
+          if [ ! -f "$F" ]; then
+            echo "##[error]Values file not present for shared DPN $N: $F"
+            FAILED=1
+            continue
+          fi
+          # A copied overlay with the wrong names would overwrite another instance.
+          SERVER=$(section_name federatorServer "$F")
+          CLIENT=$(section_name federatorClient "$F")
+          if [ "$SERVER" != "dpn-federator-server-$i" ] || [ "$CLIENT" != "dpn-federator-client-$i" ]; then
+            echo "##[error]$F must set federatorServer.name dpn-federator-server-$i and federatorClient.name dpn-federator-client-$i (found '${SERVER}' / '${CLIENT}')."
+            FAILED=1
+            continue
+          fi
+          if grep -vE '^[[:space:]]*#' "$F" | grep -q 'PLACEHOLDER'; then
+            echo "##[error]$F still contains <PLACEHOLDER-...> values:"
+            grep -vE '^[[:space:]]*#' "$F" | grep 'PLACEHOLDER' | sed 's/^/##[error]  /'
+            FAILED=1
+            continue
+          fi
+          echo "  [OK] shared DPN $N -> $F ($SERVER / $CLIENT)"
+        done
+
+        if [ "$FAILED" -ne 0 ]; then
+          echo "##[error]Shared DPN values file(s) missing or incomplete — so exiting. Nothing was deployed."
+          exit 1
+        fi
+      displayName: "Check Shared DPN Values Files (02..${{ parameters.totalDpnCount }})"
+
+    - script: |
+        echo "Loading config: $(PARAMETERS_FILE)"
+        for param in $(jq -r 'keys_unsorted | .[]' "$(Build.SourcesDirectory)/$(PARAMETERS_FILE)"); do
+          value=$(jq -r ".\"$param\"" "$(Build.SourcesDirectory)/$(PARAMETERS_FILE)")
+          echo "##vso[task.setvariable variable=$param]$value"
+        done
+      displayName: Load Environment Config
+
+    - task: AzureCLI@2
+      displayName: "AKS Auth + Pre-flight + Helm Dry Run (all shared instances)"
+      inputs:
+        azureSubscription: '${{ parameters.ServiceConnection }}'
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          set -euo pipefail
+
+          if ! command -v kubectl &>/dev/null || ! command -v kubelogin &>/dev/null; then
+            az aks install-cli --client-version 1.32.3 --kubelogin-version 0.2.18
+          fi
+          helm version >/dev/null
+
+          az account set --subscription $(AZURE_SUBSCRIPTION_ID)
+          az aks get-credentials \
+            --resource-group $(RESOURCE_GROUP) \
+            --name $(AKS_CLUSTER) \
+            --overwrite-existing
+          kubelogin convert-kubeconfig -l azurecli
+
+          echo "=========================================="
+          echo " PRE-FLIGHT — SHARED RESOURCES (primary)"
+          echo "=========================================="
+          for s in tls-auth-secret; do
+            kubectl get secret $s -n $(NAMESPACE) >/dev/null 2>&1 \
+              || { echo "##[error]$s not found in $(NAMESPACE) — run dpn-tls-cd first."; exit 1; }
+            echo "  [OK] secret $s"
+          done
+          if ! helm status $(RELEASE_PREFIX) -n $(NAMESPACE) >/dev/null 2>&1; then
+            echo "##[error]Primary release $(RELEASE_PREFIX) not found in $(NAMESPACE)."
+            echo "##[error]Shared instances use the primary's Kafka/Redis/ZooKeeper — run azure-dpn-cd first."
+            exit 1
+          fi
+          echo "  [OK] primary release $(RELEASE_PREFIX)"
+
+          VAULT_TRUSTSTORE_PASSWORD=$(az keyvault secret show \
+            --vault-name $(KEY_VAULT_NAME) \
+            --name TRUSTSTORE-PASSWORD \
+            --query value -o tsv)
+
+          # Copy of the chart holding only the federator server/client templates.
+          SHARED_CHART_DIR="$(Agent.TempDirectory)/dpn-platform-shared"
+          rm -rf "$SHARED_CHART_DIR"
+          cp -r "$(HELM_DIR)" "$SHARED_CHART_DIR"
+          find "$SHARED_CHART_DIR/templates" -maxdepth 1 -type f \
+            ! -name '_helpers.tpl' \
+            ! -name 'federator-server-deployment.yaml' \
+            ! -name 'federator-server-service.yaml' \
+            ! -name 'federator-server-lb-service.yaml' \
+            ! -name 'federator-client-deployment.yaml' \
+            ! -name 'federator-client-service.yaml' \
+            ! -name 'federator-common-config-server.yaml' \
+            ! -name 'federator-common-config-client.yaml' \
+            ! -name 'federator-server-config.yaml' \
+            ! -name 'federator-client-config.yaml' \
+            ! -name 'federator-client-connection-config.yaml' \
+            -delete
+
+          for i in $(seq 2 $(TOTAL_DPN)); do
+            N=$(printf '%02d' "$i")
+            echo "=========================================="
+            echo " SHARED DPN $N — PRE-FLIGHT + DRY RUN ($(RELEASE_PREFIX)-$N)"
+            echo "=========================================="
+            kubectl get svc dpn-vault-https-$N -n $(NAMESPACE) >/dev/null 2>&1 \
+              || { echo "##[error]Service dpn-vault-https-$N not found — run shared-vault-https-cd (dpn-federator-certificate-manager) first."; exit 1; }
+            echo "  [OK] Service dpn-vault-https-$N"
+            kubectl get secret certificate-manager-$N-secrets -n $(NAMESPACE) >/dev/null 2>&1 \
+              || { echo "##[error]Secret certificate-manager-$N-secrets not found — run shared-certificate-manager-cd (dpn-federator-certificate-manager) first."; exit 1; }
+            echo "  [OK] Secret certificate-manager-$N-secrets"
+
+            helm lint "$SHARED_CHART_DIR" \
+              -f "$(HELM_DIR)/$(VALUES_FILE)" \
+              -f "$(HELM_DIR)/$(VALUES_PREFIX)-$N.yaml"
+            helm upgrade --install $(RELEASE_PREFIX)-$N "$SHARED_CHART_DIR" \
+              -n $(NAMESPACE) \
+              --set federatorServer.image.tag="${{ parameters.imageTag }}" \
+              --set federatorClient.image.tag="${{ parameters.imageTag }}" \
+              --set vaultConfig.truststorePassword="$VAULT_TRUSTSTORE_PASSWORD" \
+              -f "$(HELM_DIR)/$(VALUES_FILE)" \
+              -f "$(HELM_DIR)/$(VALUES_PREFIX)-$N.yaml" \
+              --set federatorServer.commonConfigName="dpn-federator-server-$i-common-config" \
+              --set federatorClient.commonConfigName="dpn-federator-client-$i-common-config" \
+              --set federatorServer.configName="dpn-federator-server-$i-config" \
+              --set federatorClient.configName="dpn-federator-client-$i-config" \
+              --set federatorClient.connectionConfigName="dpn-federator-client-$i-connection-config" \
+              --dry-run >/dev/null
+            echo "$(RELEASE_PREFIX)-$N: dry-run successful"
+
+            echo "------------------------------------------"
+            echo " VAULT WIRING CHECK — dpn-federator-server/client-$i -> dpn-vault-https-$N"
+            echo "------------------------------------------"
+            # dpn-certificate-manager-$N enrols the signing cert in dpn-vault-https-$N;
+            # this instance must use exactly the same Vault, client id and role id.
+            CM_CFG="dpn-certificate-manager-$N-config"
+            LIVE_CLIENT_ID=$(kubectl get cm $CM_CFG -n $(NAMESPACE) -o jsonpath='{.data.OAUTH2_CLIENT_ID}' 2>/dev/null || true)
+            LIVE_ROLE_ID=$(kubectl get cm $CM_CFG -n $(NAMESPACE) -o jsonpath='{.data.VAULT_APPROLE_ROLE_ID}' 2>/dev/null || true)
+            LIVE_VAULT_URI=$(kubectl get cm $CM_CFG -n $(NAMESPACE) -o jsonpath='{.data.VAULT_URI}' 2>/dev/null || true)
+            if [ -z "$LIVE_CLIENT_ID" ] || [ -z "$LIVE_ROLE_ID" ]; then
+              echo "##[error]ConfigMap $CM_CFG not found or incomplete — run shared-certificate-manager-cd (dpn-federator-certificate-manager) first."
+              exit 1
+            fi
+            case "$LIVE_VAULT_URI" in
+              "https://dpn-vault-https-$N."*) echo "  [OK] dpn-certificate-manager-$N uses $LIVE_VAULT_URI" ;;
+              *) echo "##[error]dpn-certificate-manager-$N itself points at $LIVE_VAULT_URI, not dpn-vault-https-$N — fix and redeploy it first."; exit 1 ;;
+            esac
+
+            # Dummy truststore password: the render is only inspected, never applied.
+            helm template $(RELEASE_PREFIX)-$N "$SHARED_CHART_DIR" \
+              -n $(NAMESPACE) \
+              --set vaultConfig.truststorePassword="not-used-for-wiring-check" \
+              -f "$(HELM_DIR)/$(VALUES_FILE)" \
+              -f "$(HELM_DIR)/$(VALUES_PREFIX)-$N.yaml" \
+              --set federatorServer.commonConfigName="dpn-federator-server-$i-common-config" \
+              --set federatorClient.commonConfigName="dpn-federator-client-$i-common-config" \
+              --set federatorServer.configName="dpn-federator-server-$i-config" \
+              --set federatorClient.configName="dpn-federator-client-$i-config" \
+              --set federatorClient.connectionConfigName="dpn-federator-client-$i-connection-config" \
+              > "$(Agent.TempDirectory)/rendered-federator-$N.yaml"
+            bash .pipelines/scripts/shared-dpn-wiring-check.sh \
+              --rendered "$(Agent.TempDirectory)/rendered-federator-$N.yaml" \
+              --instance "$N" \
+              --label dpn-federator-server/client-$i \
+              --expect-client-id "$LIVE_CLIENT_ID" \
+              --expect-role-id "$LIVE_ROLE_ID"
+          done
+
+# -----------------------------------------------------
+# Approval (skipped for dev, same as azure-dpn-cd)
+# -----------------------------------------------------
+- ${{ if ne(parameters.environment, 'dev') }}:
+  - stage: Approval
+    displayName: "Approval Gate"
+    dependsOn: Validate
+    condition: succeeded()
+    jobs:
+    - deployment: ApprovalJob
+      environment: ${{ variables.APPROVAL_GROUP }}
+      strategy:
+        runOnce:
+          deploy:
+            steps:
+            - script: |
+                echo "Approval required before deploying shared DPN federators"
+                echo "Environment : ${{ parameters.environment }} / ${{ parameters.dpncluster }}"
+                echo "Total DPNs  : ${{ parameters.totalDpnCount }} (primary untouched)"
+                echo "Releases    : $(for i in $(seq 2 $(TOTAL_DPN)); do printf 'dpn-platform-%02d ' "$i"; done)"
+
+# -----------------------------------------------------
+# Deploy — one Helm release per shared instance
+# -----------------------------------------------------
+- stage: Deploy_Shared_DPN
+  displayName: "Deploy Shared DPN Federators to AKS"
+  dependsOn:
+    - Validate
+    - ${{ if ne(parameters.environment, 'dev') }}:
+      - Approval
+  condition: succeeded()
+  jobs:
+  - job: Deploy
+    displayName: "Helm Deploy - Shared Federators (02..${{ parameters.totalDpnCount }})"
+    steps:
+    - checkout: self
+
+    - script: |
+        echo "Loading config: $(PARAMETERS_FILE)"
+        for param in $(jq -r 'keys_unsorted | .[]' "$(Build.SourcesDirectory)/$(PARAMETERS_FILE)"); do
+          value=$(jq -r ".\"$param\"" "$(Build.SourcesDirectory)/$(PARAMETERS_FILE)")
+          echo "##vso[task.setvariable variable=$param]$value"
+        done
+      displayName: Load Environment Config
+
+    - task: AzureCLI@2
+      displayName: "AKS Auth + Helm Deploy (loop over shared instances)"
+      inputs:
+        azureSubscription: '${{ parameters.ServiceConnection }}'
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          set -euo pipefail
+
+          echo "================================================="
+          echo " INSTALL TOOLS"
+          echo "================================================="
+          if ! command -v kubectl &>/dev/null || ! command -v kubelogin &>/dev/null; then
+            az aks install-cli --client-version 1.32.3 --kubelogin-version 0.2.18
+          else
+            echo "kubectl and kubelogin already installed, skipping"
+          fi
+          kubectl version --client >/dev/null
+          kubelogin --version >/dev/null
+          helm version >/dev/null
+
+          az account set --subscription $(AZURE_SUBSCRIPTION_ID)
+          az aks get-credentials \
+            --resource-group $(RESOURCE_GROUP) \
+            --name $(AKS_CLUSTER) \
+            --overwrite-existing
+          kubelogin convert-kubeconfig -l azurecli
+
+          # Same Key Vault object the primary deploy renders into its
+          # federator-common-config ConfigMaps.
+          VAULT_TRUSTSTORE_PASSWORD=$(az keyvault secret show \
+            --vault-name $(KEY_VAULT_NAME) \
+            --name TRUSTSTORE-PASSWORD \
+            --query value -o tsv)
+
+          SHARED_CHART_DIR="$(Agent.TempDirectory)/dpn-platform-shared"
+          rm -rf "$SHARED_CHART_DIR"
+          cp -r "$(HELM_DIR)" "$SHARED_CHART_DIR"
+          find "$SHARED_CHART_DIR/templates" -maxdepth 1 -type f \
+            ! -name '_helpers.tpl' \
+            ! -name 'federator-server-deployment.yaml' \
+            ! -name 'federator-server-service.yaml' \
+            ! -name 'federator-server-lb-service.yaml' \
+            ! -name 'federator-client-deployment.yaml' \
+            ! -name 'federator-client-service.yaml' \
+            ! -name 'federator-common-config-server.yaml' \
+            ! -name 'federator-common-config-client.yaml' \
+            ! -name 'federator-server-config.yaml' \
+            ! -name 'federator-client-config.yaml' \
+            ! -name 'federator-client-connection-config.yaml' \
+            -delete
+
+          mkdir -p $(Build.ArtifactStagingDirectory)/deployed-digest
+
+          for i in $(seq 2 $(TOTAL_DPN)); do
+            N=$(printf '%02d' "$i")
+            RELEASE="$(RELEASE_PREFIX)-$N"
+            SERVER_NAME="dpn-federator-server-$i"
+            CLIENT_NAME="dpn-federator-client-$i"
+
+            echo "=========================================="
+            echo " HELM DEPLOY - SHARED DPN $N ($RELEASE)"
+            echo " Server / Client : $SERVER_NAME / $CLIENT_NAME"
+            echo " Values          : $(VALUES_FILE) + $(VALUES_PREFIX)-$N.yaml"
+            echo "=========================================="
+            helm upgrade --install $RELEASE "$SHARED_CHART_DIR" \
+              -n $(NAMESPACE) \
+              --set federatorServer.image.tag="${{ parameters.imageTag }}" \
+              --set federatorClient.image.tag="${{ parameters.imageTag }}" \
+              --set vaultConfig.truststorePassword="$VAULT_TRUSTSTORE_PASSWORD" \
+              -f "$(HELM_DIR)/$(VALUES_FILE)" \
+              -f "$(HELM_DIR)/$(VALUES_PREFIX)-$N.yaml" \
+              --set federatorServer.commonConfigName="${SERVER_NAME}-common-config" \
+              --set federatorClient.commonConfigName="${CLIENT_NAME}-common-config" \
+              --set federatorServer.configName="${SERVER_NAME}-config" \
+              --set federatorClient.configName="${CLIENT_NAME}-config" \
+              --set federatorClient.connectionConfigName="${CLIENT_NAME}-connection-config"
+
+            echo "------------------------------------------"
+            echo " POST-DEPLOY VERIFICATION - SHARED DPN $N"
+            echo "------------------------------------------"
+            kubectl rollout status deployment/${SERVER_NAME} -n $(NAMESPACE) --timeout=300s
+            kubectl rollout status deployment/${CLIENT_NAME} -n $(NAMESPACE) --timeout=300s
+            helm status $RELEASE -n $(NAMESPACE) | head -n 6
+
+            SERVER_DIGEST=$(kubectl get pods -n $(NAMESPACE) -l app=${SERVER_NAME} \
+              -o jsonpath='{.items[0].status.containerStatuses[0].imageID}')
+            CLIENT_DIGEST=$(kubectl get pods -n $(NAMESPACE) -l app=${CLIENT_NAME} \
+              -o jsonpath='{.items[0].status.containerStatuses[0].imageID}')
+            if [ -z "$SERVER_DIGEST" ] || [ -z "$CLIENT_DIGEST" ]; then
+              echo "##[error]Could not resolve deployed image digests for shared DPN $N from pod status"
+              exit 1
+            fi
+
+            for c in server client; do
+              if [ "$c" = server ]; then D="$SERVER_DIGEST"; else D="$CLIENT_DIGEST"; fi
+              {
+                echo "$D"
+                echo "component=federator-$c"
+                echo "instance=$N"
+                echo "release=$RELEASE"
+                echo "environment=${{ parameters.environment }}"
+                echo "dpncluster=${{ parameters.dpncluster }}"
+                echo "imageTag=${{ parameters.imageTag }}"
+              } > $(Build.ArtifactStagingDirectory)/deployed-digest/federator-$c-$N-digest.txt
+            done
+
+            echo "SHARED DPN $N DEPLOYMENT COMPLETE"
+          done
+
+          echo " Checking Pods..."
+          kubectl get pods -n $(NAMESPACE)
+
+    - task: PublishBuildArtifacts@1
+      displayName: 'Publish Deployed Image Digests'
+      inputs:
+        pathtoPublish: '$(Build.ArtifactStagingDirectory)/deployed-digest'
+        ArtifactName: 'deployed-image-digest'

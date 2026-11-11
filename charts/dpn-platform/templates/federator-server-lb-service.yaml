@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.federatorServer.name }}-external
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    {{- if eq .Values.cloudProvider "aws" }}
+    # Internal NLB, same annotations as the rest-federator and demo-runner charts in this
+    # repo. The Azure annotation below is ignored on EKS, which would otherwise create an
+    # internet-facing load balancer.
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+    service.beta.kubernetes.io/aws-load-balancer-internal: "true"
+    {{- else }}
+    service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+    {{- end }}
+spec:
+  type: LoadBalancer
+  loadBalancerIP: {{ .Values.federatorServer.service.loadBalancerIP }}
+  selector:
+    app: {{ .Values.federatorServer.name }}
+  ports:
+    - name: grpc-external
+      port: {{ .Values.federatorServer.service.lbPort }}
+      targetPort: {{ .Values.federatorServer.service.port }}
+      protocol: TCP
